@@ -12,20 +12,15 @@ Generates a simulated Tully-Fisher dataset by:
   6. Generating mock TFR distance moduli.
 """
 
-from dataclasses import dataclass
 import os
 import shutil
 import h5py
 import pickle
-import healpy as hp
 import pandas as pd
 import numpy as np
-import scipy as sp
 import logging
 
-from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
-from glob import glob
-from itertools import groupby
+import argparse
 
 from astropy import units as u
 from astropy.coordinates import SkyCoord
@@ -45,14 +40,24 @@ import TF_photoCorrect as tfpc  # noqa: E402  (project-local, must come after sy
 from hyperfit_v2 import MultiLinFit         # noqa: E402
 #from line_fits import hyperfit_line_multi   # noqa: E402
 
+# ---------------------------------------------------------------------------
+# Configuration 
+# ---------------------------------------------------------------------------
+from config import load_config
+CONFIG = None 
+FP_FULL = None 
 
 
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(message)s",
     datefmt="%H:%M:%S",
 )
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
+ 
 
 @dataclass
 class Config:
@@ -184,9 +189,9 @@ def profile_histogram(x, y, xbins, *, yerr=None, weights=None,
 def downsample(catalog: pd.DataFrame, size: int) -> pd.DataFrame:
     """Return *size* rows drawn without replacement from *catalog*."""
     if size >= len(catalog):
-        return catalog.copy()
+        return catalogger.copy()
     idx = np.random.choice(len(catalog), size, replace=False)
-    return catalog.iloc[idx]
+    return catalogger.iloc[idx]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -249,8 +254,8 @@ def load_spec_catalog() -> pd.DataFrame:
     ]
     merge_keys = ["targetid", "survey", "program", "healpix"]
 
-    spec = pd.read_csv(cfg.spec_cat_name, usecols=sw_keys)
-    specsp = pd.read_csv(cfg.specsp, usecols=sp_keys)
+    spec = pd.read_csv(CONFIG.spec_cat_name, usecols=sw_keys)
+    specsp = pd.read_csv(CONFIG.specsp, usecols=sp_keys)
     spec = pd.merge(spec, specsp, on=merge_keys, how="inner")
 
     # Spectroscopic pipeline selection
@@ -265,7 +270,7 @@ def load_spec_catalog() -> pd.DataFrame:
         "R_MAG_SB26", "R_MAG_SB26_ERR",
         "Z_MAG_SB26", "Z_MAG_SB26_ERR",
     ]
-    sgacat = Table.read(cfg.sga_file, "ELLIPSE")
+    sgacat = Table.read(CONFIG.sga_file, "ELLIPSE")
     sgacat.rename_column("SGA_ID", "SGA_id")
     sgacat.rename_column("RA",     "SGA_ra")
     sgacat.rename_column("DEC",    "SGA_dec")
@@ -278,10 +283,10 @@ def load_spec_catalog() -> pd.DataFrame:
     coords_sga  = SkyCoord(ra=spec["SGA_ra"].values,  dec=spec["SGA_dec"].values,  unit="deg")
     coords_spec = SkyCoord(ra=spec["target_ra"].values, dec=spec["target_dec"].values, unit="deg")
     sep2d = coords_spec.separation(coords_sga)
-    center_ok = (2.0 * sep2d.to_value("arcmin") / spec["D26"].values) < cfg.center_match_frac
+    center_ok = (2.0 * sep2d.to_value("arcmin") / spec["D26"].values) < TF_FULL.center_match_frac
     spec = spec.loc[center_ok].copy()
 
-    log.info("spec catalog loaded: %d galaxies", len(spec))
+    logger.info("spec catalog loaded: %d galaxies", len(spec))
     return spec
 
 
@@ -303,7 +308,7 @@ def load_mock(mockfile: str, spec: pd.DataFrame) -> pd.DataFrame:
 
     mock = pd.DataFrame.from_dict(mock_dict)
     mock = mock.merge(spec, on=merge_keys, how="inner")
-    log.info("Mock loaded: %d galaxies after cross-match", len(mock))
+    logger.info("Mock loaded: %d galaxies after cross-match", len(mock))
     return mock
 
 
@@ -337,13 +342,13 @@ def apply_photo_corrections(spec: pd.DataFrame) -> pd.DataFrame:
     A_k[valid_z] = kc_grz
 
     # 3. MW dust correction
-    ebv = Table.read(cfg.dust_map)
+    ebv = Table.read(CONFIG.dust_map)
     A_dust, A_dust_err = tfpc.MW_dust(spec["target_ra"].values,
                                        spec["target_dec"].values, ebv)
     for band_idx, band in enumerate("grz"):
         nan_mask = np.isnan(A_dust[band_idx])
         if nan_mask.any():
-            log.warning("NaN MW dust correction for band %s – zeroing %d entries",
+            logger.warning("NaN MW dust correction for band %s – zeroing %d entries",
                         band, nan_mask.sum())
             A_dust[band_idx][nan_mask]     = 0.0
             A_dust_err[band_idx][nan_mask] = 0.0
@@ -377,7 +382,7 @@ def apply_photo_corrections(spec: pd.DataFrame) -> pd.DataFrame:
         Model(linear_fit),
         beta0=[1.0, 1.0],
     ).run()
-    log.info("Internal dust fit:   %s ± %s", odr_result.beta, odr_result.sd_beta)
+    logger.info("Internal dust fit:   %s ± %s", odr_result.beta, odr_result.sd_beta)
 
     A_int, A_int_err = tfpc.internal_dust(spec["BA_ratio"].values,
                                            odr_result.beta, odr_result.sd_beta)
@@ -397,25 +402,25 @@ def apply_tf_selection(mock: pd.DataFrame) -> pd.DataFrame:
     Returns the filtered catalog and logs row counts at each step.
     """
     n0 = len(mock)
-    log.info("Cross-matched spec+mock catalog: %d", n0)
+    logger.info("Cross-matched spec+mock catalog: %d", n0)
 
     # Photometric quality
     bad_phot = (mock["inbasiccuts"] == 0) | (mock["has_corrupt_phot"] == 1)
     mock = mock.loc[~bad_phot].copy()
-    log.info("After photometric cuts:          %d", len(mock))
+    logger.info("After photometric cuts:          %d", len(mock))
 
     # Inclination / axial ratio
     mock = mock.loc[mock["BA_ratio"] < np.cos(np.radians(25))].copy()
-    log.info("After b/a < cos(25°):            %d", len(mock))
+    logger.info("After b/a < cos(25°):            %d", len(mock))
 
     # Morphology
     is_exp = mock["morphtype"] == "EXP"
     is_ser = (mock["morphtype"] == "SER") & (mock["sersic"] <= 2)
     mock = mock.loc[is_exp | is_ser].copy()
-    log.info("After morphology cuts:           %d", len(mock))
+    logger.info("After morphology cuts:           %d", len(mock))
 
     mock = mock.dropna()
-    log.info("After dropping NaN:              %d", len(mock))
+    logger.info("After dropping NaN:              %d", len(mock))
     return mock
 
 
@@ -453,17 +458,17 @@ def generate_logvrot(mock: pd.DataFrame, tfrcat: pd.DataFrame,
     mock["R_ABSMAG_SB26_ERR_MOCK"] = mock["R_MAG_SB26_ERR_CORR"].to_numpy()
 
     # Build adaptive magnitude bins with ≥ MIN_BIN_COUNT galaxies each
-    raw_edges = np.arange(-26.0, -12.0 + cfg.mr_bin_width, cfg.mr_bin_width)
+    raw_edges = np.arange(-26.0, -12.0 + TF_FULL.mr_bin_width, TF_FULL.mr_bin_width)
     M_r_bins  = [raw_edges[0]]
     for edge in raw_edges[1:]:
         n_in = ((tfrcat["R_ABSMAG_SB26"] > M_r_bins[-1])
                 & (tfrcat["R_ABSMAG_SB26"] <= edge)).sum()
-        if n_in >= cfg.min_bin_count:
+        if n_in >= TF_FULL.min_bin_count:
             M_r_bins.append(edge)
     M_r_bins.append(raw_edges[-1])
 
     logvrot_mock = np.zeros(len(mock))
-    logv_bins    = np.arange(cfg.logv_min, cfg.logv_max + 0.01, 0.01)
+    logv_bins    = np.arange(TF_FULL.logv_min, TF_FULL.logv_max + 0.01, 0.01)
 
     for k in tqdm(range(len(M_r_bins) - 1), desc="CDF resampling"):
         lo, hi = M_r_bins[k], M_r_bins[k + 1]
@@ -486,10 +491,10 @@ def generate_logvrot(mock: pd.DataFrame, tfrcat: pd.DataFrame,
         samples = _sample(n_mock)
 
         # Re-draw any out-of-range values
-        out_of_range = (samples < cfg.logv_min) | (samples > cfg.logv_max)
+        out_of_range = (samples < TF_FULL.logv_min) | (samples > TF_FULL.logv_max)
         while out_of_range.any():
             samples[out_of_range] = _sample(out_of_range.sum())
-            out_of_range = (samples < cfg.logv_min) | (samples > cfg.logv_max)
+            out_of_range = (samples < TF_FULL.logv_min) | (samples > TF_FULL.logv_max)
 
         logvrot_mock[mock_mask.to_numpy()] = samples
 
@@ -562,7 +567,7 @@ def fit_tfr_mock(mock: pd.DataFrame, tfrcat: pd.DataFrame,
     a_list, b_list, sigma_list = [], [], []
 
     for _ in tqdm(range(n_realisations), desc="TFR fit realisations"):
-        sample   = downsample(pool, cfg.calib_sample_size)
+        sample   = downsample(pool, TF_FULL.calib_sample_size)
         s_zidx   = np.digitize(sample["zobs"], zbins, right=True)
         logV0    = float(np.median(sample["LOGVROT_MOCK"]))
         datasets, covs = _pack_datasets(sample, s_zidx, zbin_ids, logV0)
@@ -579,7 +584,7 @@ def fit_tfr_mock(mock: pd.DataFrame, tfrcat: pd.DataFrame,
     sigma_avg = float(np.mean(sigma_list))
     logV0     = float(np.median(mock["LOGVROT_MOCK"]))
 
-    log.info("TFR fit:  a = %.3f,  σ = %.3f", a_avg, sigma_avg)
+    logger.info("TFR fit:  a = %.3f,  σ = %.3f", a_avg, sigma_avg)
     return a_avg, b_avg, sigma_avg, zbin_ids, logV0
 
 
@@ -671,11 +676,13 @@ def write_output(mock: pd.DataFrame,
         fits.Column("Y3_COMP",             "D", array=mock["Y3_COMP"].to_numpy()),
     ]
 
+    os.makedirs(os.path.dirname(outfile), exist_ok=True)
+
     hdulist = fits.BinTableHDU.from_columns(columns, header=hdr)
     hdulist.writeto(outfile, overwrite=True)
     shutil.chown(outfile, group="desi")
 
-    log.info("Output written to %s", outfile)
+    logger.info("Output written to %s", outfile)
     return outfile
 
 
@@ -684,10 +691,11 @@ def write_output(mock: pd.DataFrame,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def parse_args():
-    parser = ArgumentParser(
-        description="TFR mock generation",
-        formatter_class=ArgumentDefaultsHelpFormatter,
+    parser = argparse.ArgumentParser(
+        description="Pipeline for TF full mocks ",
     )
+    parser.add_argument("config_file", type=str, help="Configuration file path (yaml format)")
+
     parser.add_argument("-p", "--phase", dest="phase", type=int,
                         choices=range(0, 25), required=True,
                         help="Phase number (0-24)")
@@ -703,11 +711,18 @@ def main():
     args = parse_args()
     phase, real = args.phase, args.real
 
-    log.info("==  TFR mock generation for phase %d, realization %d ===", phase, real)
+    logger.info("==  TFR mock generation for phase %d, realization %d ===", phase, real)
 
+    #-- Set seed
     if args.seed is not None:
         np.random.seed(args.seed)
-        log.info("Random seed set to %d", args.seed)
+        logger.info("Random seed set to %d", args.seed)
+
+    #-- Set config
+    cfg = load_config(args.config_file)
+    global CONFIG, TF_FULL
+    CONFIG = cfg.CONFIG
+    TF_FULL = cfg.TF_FULL
 
     # ── Cosmology ─────────────────────────────────────────────────────────────
     cosmology = FlatLambdaCDM(H0=100.0, Om0=0.3151)
@@ -717,18 +732,18 @@ def main():
     spec = apply_photo_corrections(spec)
 
     # ── TFR best-fit parameters ───────────────────────────────────────────────
-    with open(cfg.tfr_pickle, "rb") as fh:
+    with open(CONFIG.data_tf_pickle, "rb") as fh:
         cov_ab, tfr_samples, logV0, zmin, zmax, dz, zbins = pickle.load(fh)
 
     tf_par    = np.median(tfr_samples, axis=1)
     a_ref     = tf_par[0]
     b_ref     = tf_par[1:-1]
     sigma_ref = tf_par[-1]
-    log.info("Reference TFR: a=%.3f, σ=%.3f", a_ref, sigma_ref)
+    logger.info("Reference TFR: a=%.3f, σ=%.3f", a_ref, sigma_ref)
 
     # ── TFR Y1 catalog ────────────────────────────────────────────────────────
-    log.info("Loading data TF catalog from %s", cfg.tf_data_file)
-    tfrcat = Table.read(cfg.tf_data_file)
+    logger.info("Loading data TF catalog from %s", CONFIG.data_tf_full)
+    tfrcat = Table.read(CONFIG.tf_data_file)
     tfrcat["logv_rot"]     = np.log10(tfrcat["V_0p4R26"])
     tfrcat["logv_rot_err"] = 0.434 * tfrcat["V_0p4R26_ERR"] / tfrcat["V_0p4R26"]
     keep_cols = [
@@ -740,8 +755,8 @@ def main():
     tfrcat = tfrcat[keep_cols].to_pandas()
 
     # ── Mock catalog ──────────────────────────────────────────────────────────
-    mock_infile = cfg.mock_infile.format(phase=phase, real=real)
-    log.info("Mock file: %s", mock_infile)
+    mock_infile = CONFIG.mock_bgs_spec_data.format(phase=phase, real=real)
+    logger.info("Mock file: %s", mock_infile)
 
     mock = load_mock(mock_infile, spec)
     mock = apply_tf_selection(mock)
@@ -775,9 +790,9 @@ def main():
     mock["MAX_VOL_FRAC"] = (dist_max_galaxy.to("Mpc") / dist_max_survey.to("Mpc")) ** 3
 
     # ── Write output ──────────────────────────────────────────────────────────
-    outfile = cfg.mock_tf_out.format(phase=phase, real=real)
+    outfile = CONFIG.mock_tf_full_data.format(phase=phase, real=real)
     write_output(mock, a_fit, b_fit, sigma_fit, outfile)
-    log.info("Done")
+    logger.info("Done")
 
 if __name__ == "__main__":
     main()

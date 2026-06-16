@@ -23,11 +23,9 @@ from sklearn.neighbors import KDTree
 # Configuration
 # ---------------------------------------------------------------------------
 
-from mock_config import CONFIG, FP_CLUS
-
-os.makedirs(CONFIG.mock_fp_clus_dir, exist_ok=True)
-os.makedirs(CONFIG.mock_fp_clus_dir + "/data", exist_ok=True)
-os.makedirs(CONFIG.mock_fp_clus_dir + "/rand", exist_ok=True)
+from config import load_config
+CONFIG = None 
+FP_CLUS = None 
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -625,6 +623,7 @@ def write_random_catalogue(
         [fits.Column(name=n, format="D", array=a) for n, a in columns]
     )
     mock_fp_clus_rand = CONFIG.mock_fp_clus_rand.format(phase=FP_CLUS.phase)
+    os.makedirs(os.path.dirname(mock_fp_clus_rand), exist_ok=True)
     log.info("Writing random catalogue → %s", mock_fp_clus_rand)
     hdu.writeto(mock_fp_clus_rand, overwrite=True)
 
@@ -632,10 +631,14 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Pipeline FP clustering "
     )
+    parser.add_argument("config_file", type=str, help="Configuration file path (yaml format)")
     parser.add_argument("phase", type=int, help="Phase (0–24)")
+    parser.add_argument("--seed", dest="seed", type=int, default=None,
+                        help="NumPy random seed for reproducibility")
     args = parser.parse_args()
     if not (0 <= args.phase <= 24):
         parser.error("phase should be between 0 and 24")
+
     return args
 
 # ---------------------------------------------------------------------------
@@ -644,7 +647,18 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+
+    #-- Set seed
+    if args.seed is not None:
+        np.random.seed(args.seed)
+        log.info("Random seed set to %d", args.seed)
+
+    #-- Set config
+    cfg = load_config(args.config_file)
+    global CONFIG, FP_CLUS
+    CONFIG, FP_CLUS = cfg.CONFIG, cfg.FP_CLUS    
     FP_CLUS.phase = args.phase
+
 
     log.info(f"=== DESI FP clustering mocks pipeline for phase {FP_CLUS.phase:03d} ===")
 

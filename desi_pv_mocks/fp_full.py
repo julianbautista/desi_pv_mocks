@@ -31,7 +31,9 @@ from scipy.spatial import KDTree
 # ---------------------------------------------------------------------------
 # Configuration 
 # ---------------------------------------------------------------------------
-from mock_config import CONFIG, FP_FULL
+from config import load_config
+CONFIG = None 
+FP_FULL = None 
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -330,7 +332,7 @@ def compute_logdist(FPparams, fpmock):
 # ---------------------------------------------------------------------------
 # Chargement & filtrage des données
 # ---------------------------------------------------------------------------
-def load_spec_data(path, delta_chi2_cut = 30.0):
+def load_spec_data(path, usecols=None, delta_chi2_cut = 30.0):
     """
     Loads spec catalog and applies quality cut in redshift 
     """
@@ -345,7 +347,7 @@ def load_spec_data(path, delta_chi2_cut = 30.0):
         #"deltachi2", 
     #    "circ_radius", "circ_radius_err", "BA_ratio",
     #]
-    df = pd.read_csv(path, usecols=CONFIG.spec_keys)
+    df = pd.read_csv(path, usecols=usecols)
     before = len(df)
     #df = df[df["deltachi2"] >= delta_chi2_cut].reset_index(drop=True)
     df = df[df["zwarn"] == 0].reset_index(drop=True)
@@ -716,6 +718,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Pipeline FP mock — calcul des log-distances pour BGS AbacusSummit."
     )
+    parser.add_argument("config_file", type=str, help="Configuration file path (yaml format)")
     parser.add_argument("phase",        type=int, help="Phase (0–24)")
     parser.add_argument("real", type=int, help="Realisation (0-26)")
     args = parser.parse_args()
@@ -734,6 +737,10 @@ def main() -> None:
     phase, real = args.phase, args.real
     logger.info("=== Pipeline FP  phase=%03d  real=%03d ===", phase, real)
  
+    cfg = load_config(args.config_file)
+    global CONFIG, FP_FULL
+    CONFIG = cfg.CONFIG
+    FP_FULL = cfg.FP_FULL
  
     outfile = CONFIG.mock_fp_full_data.format(phase=phase, real=real)
     if os.path.exists(outfile) and not FP_FULL.overwrite:
@@ -750,7 +757,7 @@ def main() -> None:
     k_g = GAMA_KCorrection(Planck15, CONFIG.kcorr_g_path)
  
     # --- Reading reference data catalogs ---
-    spec   = load_spec_data(CONFIG.spec_csv)
+    spec   = load_spec_data(CONFIG.spec_csv, usecols=CONFIG.spec_keys)
     fp_data = load_fp_catalog(CONFIG.data_fp_full)
  
     # --- Reading mock ---

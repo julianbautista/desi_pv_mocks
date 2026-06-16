@@ -8,7 +8,7 @@ class Config:
             if isinstance(value, str):
                 value = value.format(**data)
                 data[key] = value
-                print(key, data[key])
+                #print(key, data[key])
             setattr(self, key, Config(value) if isinstance(value, dict) else value)
 
     def __repr__(self):

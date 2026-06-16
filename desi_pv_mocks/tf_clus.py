@@ -13,6 +13,7 @@ pv_from_logdist, build_density_grid, lookup_grid) are identical.
 import os
 import h5py
 import logging
+import argparse
 import numpy as np
 import pandas as pd
 from astropy.io import fits
@@ -25,11 +26,8 @@ from sklearn.neighbors import KDTree
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-from mock_config import CONFIG, TF_CLUS
-
-os.makedirs(CONFIG.mock_tf_clus_dir, exist_ok=True)
-os.makedirs(CONFIG.mock_tf_clus_dir + "/data", exist_ok=True)
-os.makedirs(CONFIG.mock_tf_clus_dir + "/rand", exist_ok=True)
+from config import load_config
+CONFIG, TF_CLUS = None, None
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -660,6 +658,7 @@ def write_random_catalogue(
             for nm, arr in columns
         ])
     log.info("  Writing random catalogue → %s", CONFIG.mock_tf_clus_rand)
+    os.makedirs(os.path.dirname(CONFIG.mock_tf_clus_rand), exist_ok=True)
     hdu.writeto(CONFIG.mock_tf_clus_rand, overwrite=True)
 
     #n_base     = int((nztfmock * subfrac).sum())
@@ -671,10 +670,21 @@ def write_random_catalogue(
 # ---------------------------------------------------------------------------
 # Main pipeline
 # ---------------------------------------------------------------------------
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Pipeline TF clustering "
+    )
+    parser.add_argument("config_file", type=str, help="Configuration file path (yaml format)")
+    args = parser.parse_args()
+    return args
 
 def main() -> None:
     log.info("=== DESI TF Mocks Pipeline ===")
-
+    args = parse_args()
+    cfg = load_config(args.config_file)
+    global CONFIG, TF_CLUS
+    CONFIG, TF_CLUS = cfg.CONFIG, cfg.TF_CLUS  
+    
     # 1. Load observed data
     tf_data, tf_rand = load_observed_data()
 

@@ -7,6 +7,7 @@ the grid at galaxy positions, and writes FITS output catalogues.
 """
 
 import subprocess
+import argparse
 import os
 import logging
 import h5py
@@ -18,7 +19,9 @@ from astropy.io import fits
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-from mock_config import CONFIG, BGS_CLUS
+from config import load_config
+CONFIG = None 
+FP_CLUS = None 
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -95,11 +98,23 @@ def write_ndens_grid(path, zmin, zmax, box, grid):
     log.info("Number density grid written to %s", path)
  
  
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Pipeline BGS clustering "
+    )
+    parser.add_argument("config_file", type=str, help="Configuration file path (yaml format)")
+    args = parser.parse_args()
+    return args
+
 # ---------------------------------------------------------------------------
 # Main pipeline
 # ---------------------------------------------------------------------------
  
 def main():
+    args = parse_args()
+    cfg = load_config(args.config_file)
+    global CONFIG, BGS_CLUS 
+    CONFIG, BGS_CLUS = cfg.CONFIG, cfg.BGS_CLUS
 
     comp_field = CONFIG.comp_field
     rng = np.random.default_rng()

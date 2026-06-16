@@ -6,6 +6,7 @@ finding its nearest neighbour in (z, M_r, g-r) space using a KD-tree
 built from the spectroscopic sample.
 """
 import logging
+import argparse
 import os
 import h5py
 import numpy as np
@@ -21,8 +22,9 @@ from k_correction import GAMA_KCorrection
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
- 
-from mock_config import CONFIG, BGS_SPEC
+from config import load_config
+CONFIG=None 
+BGS_SPEC=None
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -205,11 +207,23 @@ def plot_mass_ssfr(spec, mock_counts, massbins, ssfrbins, outpath):
     plt.close(fig)
  
  
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Pipeline BGS spectro properties "
+    )
+    parser.add_argument("config_file", type=str, help="Configuration file path (yaml format)")
+    args = parser.parse_args()
+    return args
+
 # ---------------------------------------------------------------------------
 # Main pipeline
 # ---------------------------------------------------------------------------
  
 def main():
+    args = parse_args()
+    cfg = load_config(args.config_file)
+    global CONFIG, BGS_SPEC
+    CONFIG, BGS_SPEC = cfg.CONFIG, cfg.BGS_SPEC
 
     k_r = GAMA_KCorrection(Planck15, CONFIG.kcorr_file)
     spec = load_and_clean_spec(k_r)
