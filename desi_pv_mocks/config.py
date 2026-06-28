@@ -22,7 +22,7 @@ def load_config(path="config.yaml") -> Config:
     return Config(raw)
 
 if __name__ == '__main__':
-    cfg = load_config('mock_config_v2.1.yaml')
-    CONFIG = cfg.CONFIG 
-    print(CONFIG.mock_bgs_clus_data.format(phase=1, real=2))
-    print(CONFIG.mock_bgs_clus_rand)
+    cfg = load_config('config_files/mock_config_v3.0.yaml')
+    print(cfg.mock_bgs_spec_dir)
+    print(cfg.mock_bgs_clus_data.format(phase=1, real=2))
+    print(cfg.mock_bgs_clus_rand)

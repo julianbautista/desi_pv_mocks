@@ -20,8 +20,7 @@ from astropy.io import fits
 # Configuration
 # ---------------------------------------------------------------------------
 from config import load_config
-CONFIG = None 
-FP_CLUS = None 
+cfg = None
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -103,6 +102,11 @@ def parse_args() -> argparse.Namespace:
         description="Pipeline BGS clustering "
     )
     parser.add_argument("config_file", type=str, help="Configuration file path (yaml format)")
+    parser.add_argument("phase",        type=int, help="Phase (0–24)")
+    args = parser.parse_args()
+    if not (0 <= args.phase <= 24):
+        parser.error("phase should be between 0 and 24")
+
     args = parser.parse_args()
     return args
 
@@ -112,59 +116,60 @@ def parse_args() -> argparse.Namespace:
  
 def main():
     args = parse_args()
+    global cfg
     cfg = load_config(args.config_file)
-    global CONFIG, BGS_CLUS 
-    CONFIG, BGS_CLUS = cfg.CONFIG, cfg.BGS_CLUS
+    phase = args.phase
+    #cfg.bgs_clus.phase = args.phase
 
-    comp_field = CONFIG.comp_field
+    comp_field = cfg.comp_field
     rng = np.random.default_rng()
  
-    os.makedirs(CONFIG.mock_bgs_clus_dir, exist_ok=True)
-    os.makedirs(CONFIG.mock_bgs_clus_dir+"/data", exist_ok=True)
-    os.makedirs(CONFIG.mock_bgs_clus_dir+"/rand", exist_ok=True)
+    os.makedirs(cfg.mock_bgs_clus_dir, exist_ok=True)
+    os.makedirs(cfg.mock_bgs_clus_dir+"/data", exist_ok=True)
+    os.makedirs(cfg.mock_bgs_clus_dir+"/rand", exist_ok=True)
 
     cosmo = FlatLambdaCDM(H0=100, Om0=0.3151)
-    distmax = cosmo.comoving_distance(BGS_CLUS.zmax).value
-    box = build_grid_box(distmax, BGS_CLUS.ngrid)
+    distmax = cosmo.comoving_distance(cfg.bgs_clus.zmax).value
+    box = build_grid_box(distmax, cfg.bgs_clus.ngrid)
     n = box["n"]
  
     # ------------------------------------------------------------------
     # Phase 1: build the number density grid from all random catalogues
     # ------------------------------------------------------------------
  
-    log.info("=== Building number density grid from randoms ===")
+    log.info(f"=== Building number density grid from randoms for phase {phase:03d} ===")
  
     ra_ran, dec_ran, z_ran = [], [], []
     counts_ran = []
 
-    for phase in range(CONFIG.n_phases_rand):
-        for real in range(CONFIG.n_reals):
-            mock_infile_rand = CONFIG.mock_bgs_base_rand.format(phase=phase, real=real)
-            log.info("Reading random catalogue: %s", mock_infile_rand)
- 
-            with h5py.File(mock_infile_rand, "r") as hf:
-                ra   = hf["ra"][...]
-                dec  = hf["dec"][...]
-                zobs = hf["zobs"][...]
-                absmag = hf["abs_mag"][...]
-                appmag = hf["app_mag"][...]
-                comp   = hf[comp_field][...]
- 
-            mask = apply_selection(
-                zobs, appmag, absmag, comp,
-                zmin=BGS_CLUS.zmin, 
-                zmax=BGS_CLUS.zmax,
-                appmaglim=BGS_CLUS.appmaglim, 
-                absmaglim=BGS_CLUS.absmaglim,
-                rng=rng,
-            )
-            n_sel = mask.sum()
-            log.info(f" {n_sel} / {len(ra)} randoms pass selection (z, mag, completeness)" )
-            counts_ran.append(n_sel)
-            ra_ran.append(ra[mask])
-            dec_ran.append(dec[mask])
-            z_ran.append(zobs[mask])
- 
+    #for phase in range(cfg.n_phases_rand):
+    for real in range(cfg.n_reals):
+        mock_infile_rand = cfg.mock_bgs_base_rand.format(phase=phase, real=real)
+        log.info("Reading random catalogue: %s", mock_infile_rand)
+
+        with h5py.File(mock_infile_rand, "r") as hf:
+            ra   = hf["ra"][...]
+            dec  = hf["dec"][...]
+            zobs = hf["zobs"][...]
+            absmag = hf["abs_mag"][...]
+            appmag = hf["app_mag"][...]
+            comp   = hf[comp_field][...]
+
+        mask = apply_selection(
+            zobs, appmag, absmag, comp,
+            zmin=cfg.bgs_clus.zmin, 
+            zmax=cfg.bgs_clus.zmax,
+            appmaglim=cfg.bgs_clus.appmaglim, 
+            absmaglim=cfg.bgs_clus.absmaglim,
+            rng=rng,
+        )
+        n_sel = mask.sum()
+        log.info(f" {n_sel} / {len(ra)} randoms pass selection (z, mag, completeness)" )
+        counts_ran.append(n_sel)
+        ra_ran.append(ra[mask])
+        dec_ran.append(dec[mask])
+        z_ran.append(zobs[mask])
+
     ra_ran  = np.concatenate(ra_ran)
     dec_ran = np.concatenate(dec_ran)
     z_ran   = np.concatenate(z_ran)
@@ -186,8 +191,8 @@ def main():
     ndensgrid = (n_avg / box["dvol"]) * (wingrid / wingrid.sum())
  
     # Save grid
-    ndens_outfile = f"ndens_denssample_mock_{comp_field}_{CONFIG.n_phases_rand*CONFIG.n_reals}.dat"
-    write_ndens_grid(ndens_outfile, BGS_CLUS.zmin, BGS_CLUS.zmax, box, ndensgrid)
+    ndens_outfile = f"ndens_denssample_mock_{comp_field}_{phase}_{cfg.n_reals}.dat"
+    write_ndens_grid(ndens_outfile, cfg.bgs_clus.zmin, cfg.bgs_clus.zmax, box, ndensgrid)
  
     # Sample grid at random positions (for the output random catalogue)
     ix = safe_digitize(x_ran, box["lims"], n)
@@ -205,8 +210,9 @@ def main():
         WEIGHT=w_ran,
         NDENS=ndens_ran,
     )
-    hdu.writeto(CONFIG.mock_bgs_clus_rand, overwrite=True)
-    log.info(f"Written: {CONFIG.mock_bgs_clus_rand}")
+    rand_file = cfg.mock_bgs_clus_rand.format(phase=phase)
+    hdu.writeto(rand_file, overwrite=True)
+    log.info(f"Written: {rand_file}")
     log.info("=== Done ===")
 
     # ------------------------------------------------------------------
@@ -216,61 +222,60 @@ def main():
     log.info("=== Processing data catalogues ===")
  
 
-    for phase in range(CONFIG.n_phases):
-        for real in range(CONFIG.n_reals):            
-            mock_infile_data = CONFIG.mock_bgs_base_data.format(phase=phase, real=real)
-            mock_outfile_data = CONFIG.mock_bgs_clus_data.format(phase=phase, real=real)
+    #for phase in range(cfg.n_phases):
+    for real in range(cfg.n_reals):            
+        mock_infile_data = cfg.mock_bgs_base_data.format(phase=phase, real=real)
+        mock_outfile_data = cfg.mock_bgs_clus_data.format(phase=phase, real=real)
 
-            if os.path.exists(mock_outfile_data) and not BGS_CLUS.overwrite:
-                log.info("Already exists: %s — skipped", mock_outfile_data)
-                continue
+        if os.path.exists(mock_outfile_data) and not cfg.bgs_clus.overwrite:
+            log.info("Already exists: %s — skipped", mock_outfile_data)
+            continue
 
-            if not os.path.exists(mock_infile_data):
-                log.warning("Missing input file: %s — skipped", mock_infile_data)
-                continue
+        if not os.path.exists(mock_infile_data):
+            log.warning("Missing input file: %s — skipped", mock_infile_data)
+            continue
 
-            log.info("Reading data catalogue: %s", mock_infile_data)
- 
-            with h5py.File(mock_infile_data, "r") as hf:
-                ra   = hf["ra"][...]
-                dec  = hf["dec"][...]
-                zobs = hf["zobs"][...]
-                absmag = hf["abs_mag"][...]
-                appmag = hf["app_mag"][...]
-                comp   = hf[comp_field][...]
- 
-            mask = apply_selection(
-                zobs, appmag, absmag, comp,
-                zmin=BGS_CLUS.zmin, 
-                zmax=BGS_CLUS.zmax,
-                appmaglim=BGS_CLUS.appmaglim, 
-                absmaglim=BGS_CLUS.absmaglim,
-                rng=rng,
-            )
-            ra, dec, zobs = ra[mask], dec[mask], zobs[mask]
-            log.info(f"  {len(ra)} galaxies pass selection")
- 
-            x_dat, y_dat, z_dat_cart = radec_z_to_xyz(ra, dec, zobs, cosmo)
- 
-            ix = safe_digitize(x_dat, box["lims"], n)
-            iy = safe_digitize(y_dat, box["lims"], n)
-            iz = safe_digitize(z_dat_cart, box["lims"], n)
-            ndens_dat = ndensgrid[ix, iy, iz]
-            
-            hdu = make_fits_table(
-                RA=ra, DEC=dec, Z=zobs,
-                WEIGHT=np.ones(len(ra)),
-                NDENS=ndens_dat,
-            )
-            hdu.writeto(mock_outfile_data, overwrite=True)
-            log.info(f"Written: {mock_outfile_data}")
+        log.info("Reading data catalogue: %s", mock_infile_data)
+
+        with h5py.File(mock_infile_data, "r") as hf:
+            ra   = hf["ra"][...]
+            dec  = hf["dec"][...]
+            zobs = hf["zobs"][...]
+            absmag = hf["abs_mag"][...]
+            appmag = hf["app_mag"][...]
+            comp   = hf[comp_field][...]
+
+        mask = apply_selection(
+            zobs, appmag, absmag, comp,
+            zmin=cfg.bgs_clus.zmin, 
+            zmax=cfg.bgs_clus.zmax,
+            appmaglim=cfg.bgs_clus.appmaglim, 
+            absmaglim=cfg.bgs_clus.absmaglim,
+            rng=rng,
+        )
+        ra, dec, zobs = ra[mask], dec[mask], zobs[mask]
+        log.info(f"  {len(ra)} galaxies pass selection")
+
+        x_dat, y_dat, z_dat_cart = radec_z_to_xyz(ra, dec, zobs, cosmo)
+
+        ix = safe_digitize(x_dat, box["lims"], n)
+        iy = safe_digitize(y_dat, box["lims"], n)
+        iz = safe_digitize(z_dat_cart, box["lims"], n)
+        ndens_dat = ndensgrid[ix, iy, iz]
+        
+        hdu = make_fits_table(
+            RA=ra, DEC=dec, Z=zobs,
+            WEIGHT=np.ones(len(ra)),
+            NDENS=ndens_dat,
+        )
+        hdu.writeto(mock_outfile_data, overwrite=True)
+        log.info(f"Written: {mock_outfile_data}")
 
     log.info("=== Updating permissions ===")
     result = subprocess.run(
-        ["chgrp", "-R", "desi", CONFIG.mock_bgs_clus_dir],
+        ["chgrp", "-R", "desi", cfg.mock_bgs_clus_dir],
         check=True,
     )
-    print(result)
  
     log.info("=== Done ===")
  

@@ -24,8 +24,7 @@ from sklearn.neighbors import KDTree
 # ---------------------------------------------------------------------------
 
 from config import load_config
-CONFIG = None 
-FP_CLUS = None 
+cfg = None
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -140,10 +139,10 @@ def lookup_grid(
 def load_observed_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Load BGS and FP clustering data + randoms."""
     log.info("Loading observed data …")
-    #bgs_data = Table.read(CONFIG.data_bgs_clus_data).to_pandas()
-    bgs_rand = Table.read(CONFIG.data_bgs_clus_rand).to_pandas()
-    fp_data  = Table.read(CONFIG.data_fp_clus_data).to_pandas()
-    #fp_rand  = Table.read(CONFIG.data_fp_clus_rand).to_pandas()
+    #bgs_data = Table.read(cfg.data_bgs_clus_data).to_pandas()
+    bgs_rand = Table.read(cfg.data_bgs_clus_rand).to_pandas()
+    fp_data  = Table.read(cfg.data_fp_clus_data).to_pandas()
+    #fp_rand  = Table.read(cfg.data_fp_clus_rand).to_pandas()
 
     fp_data["LOGDIST_GAUSS_ERR"] = reweight(fp_data["LOGDIST"], fp_data["LOGDIST_ERR"])
 
@@ -159,17 +158,17 @@ def accumulate_mock_statistics() -> dict:
     Returns a dict of arrays for downstream use.
     """
     log.info("Accumulating mock statistics …")
-    zlims = [FP_CLUS.zmin, FP_CLUS.zmax]
+    zlims = [cfg.fp_clus.zmin, cfg.fp_clus.zmax]
 
     # Accumulators
-    nz_bgs_mock      = np.zeros(FP_CLUS.nzbin)
-    nz_bgs_mock_err2  = np.zeros(FP_CLUS.nzbin)
-    nz_fp_mock    = np.zeros(FP_CLUS.nzbin)
-    nz_fp_mock_err2 = np.zeros(FP_CLUS.nzbin)
-    logdistmock  = np.zeros(FP_CLUS.nzbin)
-    logdisterr   = np.zeros(FP_CLUS.nzbin)
-    logdisterr_g = np.zeros(FP_CLUS.nzbin)
-    pullmock     = np.zeros(FP_CLUS.nzbin)
+    nz_bgs_mock      = np.zeros(cfg.fp_clus.nzbin)
+    nz_bgs_mock_err2  = np.zeros(cfg.fp_clus.nzbin)
+    nz_fp_mock    = np.zeros(cfg.fp_clus.nzbin)
+    nz_fp_mock_err2 = np.zeros(cfg.fp_clus.nzbin)
+    logdistmock  = np.zeros(cfg.fp_clus.nzbin)
+    logdisterr   = np.zeros(cfg.fp_clus.nzbin)
+    logdisterr_g = np.zeros(cfg.fp_clus.nzbin)
+    pullmock     = np.zeros(cfg.fp_clus.nzbin)
 
     mock_count = fpmock_count = 0
     ngals = 0
@@ -184,16 +183,16 @@ def accumulate_mock_statistics() -> dict:
     all_ld_cerr   = []
     all_ld_gerr   = []
 
-    #for phase in range(CONFIG.n_phases):
-    for phase in [FP_CLUS.phase]:
+    #for phase in range(cfg.n_phases):
+    for phase in [cfg.fp_clus.phase]:
         log.info("  Phase %d …", phase)
-        for real in range(CONFIG.n_reals):
+        for real in range(cfg.n_reals):
 
             # ---- BGS clustering mock ----
-            bgs_file = CONFIG.mock_bgs_clus_data.format(phase=phase, real=real)
+            bgs_file = cfg.mock_bgs_clus_data.format(phase=phase, real=real)
             try:
                 mock = Table.read(bgs_file).to_pandas()
-                nz   = np.histogram(mock["Z"], bins=FP_CLUS.nzbin, range=zlims, weights=mock["WEIGHT"])[0]
+                nz   = np.histogram(mock["Z"], bins=cfg.fp_clus.nzbin, range=zlims, weights=mock["WEIGHT"])[0]
                 nz_bgs_mock     += nz
                 nz_bgs_mock_err2 += nz ** 2
                 mock_count += 1
@@ -201,10 +200,10 @@ def accumulate_mock_statistics() -> dict:
                 log.warning("Skipping BGS mock %s: %s", bgs_file, exc)
 
             # ---- FP full mock ----
-            fp_file = CONFIG.mock_fp_full_data.format(phase=phase, real=real)
+            fp_file = cfg.mock_fp_full_data.format(phase=phase, real=real)
             try:
                 mock = Table.read(fp_file).to_pandas()
-                mock = mock[(mock["ZOBS"] >= FP_CLUS.zmin) & (mock["ZOBS"] <= FP_CLUS.zmax)].copy()
+                mock = mock[(mock["ZOBS"] >= cfg.fp_clus.zmin) & (mock["ZOBS"] <= cfg.fp_clus.zmax)].copy()
                 ngals += len(mock)
 
                 mock["LOGDIST_GAUSS_ERR"] = reweight(
@@ -229,18 +228,18 @@ def accumulate_mock_statistics() -> dict:
                 all_ld_gerr.append(mock["LOGDIST_GAUSS_ERR"].to_numpy())
 
                 # Histograms
-                nz = np.histogram(mock["ZOBS"], bins=FP_CLUS.nzbin, range=zlims)[0]
+                nz = np.histogram(mock["ZOBS"], bins=cfg.fp_clus.nzbin, range=zlims)[0]
                 nz_fp_mock     += nz
                 nz_fp_mock_err2 += nz ** 2
-                logdistmock  += np.histogram(mock["LOGDIST_CORR"], bins=FP_CLUS.nzbin, range=[-0.3, 0.3])[0]
-                logdisterr   += np.histogram(mock["LOGDIST_CORR_ERR"], bins=FP_CLUS.nzbin, range=[0.08, 0.30])[0]
-                logdisterr_g += np.histogram(mock["LOGDIST_GAUSS_ERR"], bins=FP_CLUS.nzbin, range=[0.08, 0.30])[0]
+                logdistmock  += np.histogram(mock["LOGDIST_CORR"], bins=cfg.fp_clus.nzbin, range=[-0.3, 0.3])[0]
+                logdisterr   += np.histogram(mock["LOGDIST_CORR_ERR"], bins=cfg.fp_clus.nzbin, range=[0.08, 0.30])[0]
+                logdisterr_g += np.histogram(mock["LOGDIST_GAUSS_ERR"], bins=cfg.fp_clus.nzbin, range=[0.08, 0.30])[0]
 
                 pulls = (
                     (mock["LOGDIST_CORR"] - mock["LOGDIST_TRUE"])
                     / mock["LOGDIST_GAUSS_ERR"]
                 )
-                pullmock  += np.histogram(pulls, bins=FP_CLUS.nzbin, range=[-4.0, 4.0])[0]
+                pullmock  += np.histogram(pulls, bins=cfg.fp_clus.nzbin, range=[-4.0, 4.0])[0]
                 mean_pull += pulls.sum()
                 std_pull  += (pulls ** 2).sum()
 
@@ -303,9 +302,9 @@ def compute_logdist_bias_correction(stats: dict) -> CubicSpline:
     Fit a cubic spline to the weighted-mean logdist residual vs. redshift.
     Returns a callable correction f(z).
     """
-    bins    = np.linspace(FP_CLUS.zmin, FP_CLUS.zmax, FP_CLUS.nzbin)
+    bins    = np.linspace(cfg.fp_clus.zmin, cfg.fp_clus.zmax, cfg.fp_clus.nzbin)
     midvals = 0.5 * (bins[:-1] + bins[1:])
-    ld_mean = np.zeros(FP_CLUS.nzbin - 1)
+    ld_mean = np.zeros(cfg.fp_clus.nzbin - 1)
 
     zv  = stats["zvals"]
     ldc = stats["logdists_corr"]
@@ -332,21 +331,21 @@ def build_random_catalogue(subfrac: np.ndarray, nz_fp_mock: np.ndarray) -> pd.Da
     log.info("Reading Abacus random catalogues …")
     ra_all, dec_all, z_all = [], [], []
 
-    #for phase in range(CONFIG.n_real_rand):
-    for phase in [FP_CLUS.phase]: 
-        for ireal in range(CONFIG.n_reals):
+    #for phase in range(cfg.n_real_rand):
+    for phase in [cfg.fp_clus.phase]: 
+        for ireal in range(cfg.n_reals):
             log.info("  Randoms phase %d real %d", phase, ireal)
-            path = CONFIG.mock_bgs_base_rand.format(phase=phase, real=ireal)
+            path = cfg.mock_bgs_base_rand.format(phase=phase, real=ireal)
             try:
                 with h5py.File(path, "r") as f:
                     ra   = f["ra"][...]
                     dec  = f["dec"][...]
                     z    = f["zobs"][...]
-                    comp = f[CONFIG.comp_field][...]
+                    comp = f[cfg.comp_field][...]
                 nran = len(ra)
                 cut  = (
-                    (z >= FP_CLUS.zmin)
-                    & (z <= FP_CLUS.zmax)
+                    (z >= cfg.fp_clus.zmin)
+                    & (z <= cfg.fp_clus.zmax)
                     & (np.random.uniform(size=nran) < comp)
                 )
                 ra_all.append(ra[cut])
@@ -366,11 +365,11 @@ def build_random_catalogue(subfrac: np.ndarray, nz_fp_mock: np.ndarray) -> pd.Da
     log.info("  Total randoms before sub-sampling: %d", len(z_cat))
 
     # Sub-sample to match the (already subsampled) mock n(z)
-    nzold      = np.histogram(z_cat, bins=FP_CLUS.nzbin, range=[FP_CLUS.zmin, FP_CLUS.zmax], weights=w_cat)[0]
+    nzold      = np.histogram(z_cat, bins=cfg.fp_clus.nzbin, range=[cfg.fp_clus.zmin, cfg.fp_clus.zmax], weights=w_cat)[0]
     sfrac_ran  = np.where(nzold > 0, nz_fp_mock * subfrac / nzold, 0.0)
     sfrac_ran /= sfrac_ran.max()
-    izs = np.digitize(z_cat, np.linspace(FP_CLUS.zmin, FP_CLUS.zmax, FP_CLUS.nzbin + 1)) - 1
-    izs = np.clip(izs, 0, FP_CLUS.nzbin - 1)
+    izs = np.digitize(z_cat, np.linspace(cfg.fp_clus.zmin, cfg.fp_clus.zmax, cfg.fp_clus.nzbin + 1)) - 1
+    izs = np.clip(izs, 0, cfg.fp_clus.nzbin - 1)
     cut = sfrac_ran[izs] > np.random.uniform(size=len(z_cat))
     ra_cat, dec_cat, z_cat, w_cat = ra_cat[cut], dec_cat[cut], z_cat[cut], w_cat[cut]
     log.info("  Total randoms after  sub-sampling: %d", len(z_cat))
@@ -384,15 +383,15 @@ def build_random_catalogue(subfrac: np.ndarray, nz_fp_mock: np.ndarray) -> pd.Da
 
 def build_grid_geometry() -> dict:
     """Return the grid geometry (box dimensions, bin edges, voxel volume)."""
-    distmax = cosmo.comoving_distance(FP_CLUS.zmax).value
+    distmax = cosmo.comoving_distance(cfg.fp_clus.zmax).value
     lx = ly = lz = 2.0 * distmax
-    dx = dy = dz = lx / FP_CLUS.ngrid
+    dx = dy = dz = lx / cfg.fp_clus.ngrid
     x0 = y0 = z0 = distmax
     dvol = dx * dy * dz
 
-    xlims = np.linspace(0.0, lx, FP_CLUS.ngrid + 1) - x0
-    ylims = np.linspace(0.0, ly, FP_CLUS.ngrid + 1) - y0
-    zlims = np.linspace(0.0, lz, FP_CLUS.ngrid + 1) - z0
+    xlims = np.linspace(0.0, lx, cfg.fp_clus.ngrid + 1) - x0
+    ylims = np.linspace(0.0, ly, cfg.fp_clus.ngrid + 1) - y0
+    zlims = np.linspace(0.0, lz, cfg.fp_clus.ngrid + 1) - z0
 
     return dict(lx=lx, ly=ly, lz=lz, x0=x0, y0=y0, z0=z0, dvol=dvol,
                 xlims=xlims, ylims=ylims, zlims=zlims)
@@ -416,7 +415,7 @@ def build_density_grids(
         norm=nz_bgs_mock.sum() / geom["dvol"],
         grid_edges=(geom["lx"], geom["ly"], geom["lz"],
                     geom["x0"], geom["y0"], geom["z0"]),
-        ngrid=FP_CLUS.ngrid, box_vol=geom["dvol"],
+        ngrid=cfg.fp_clus.ngrid, box_vol=geom["dvol"],
     )
 
     npvweigrid = build_density_grid(
@@ -425,7 +424,7 @@ def build_density_grids(
         norm=(nz_fp_mock * subfrac).sum() / geom["dvol"],
         grid_edges=(geom["lx"], geom["ly"], geom["lz"],
                     geom["x0"], geom["y0"], geom["z0"]),
-        ngrid=FP_CLUS.ngrid, box_vol=geom["dvol"],
+        ngrid=cfg.fp_clus.ngrid, box_vol=geom["dvol"],
     )
 
     log.info("  n(z) total: BGS mock=%.0f | FP mock=%.0f | FP subsampled=%.0f",
@@ -450,12 +449,12 @@ def process_mock(
     and density field sampling to a single mock realisation.
     Returns the processed DataFrame with all output columns.
     """
-    mock = mock[(mock["ZOBS"] >= FP_CLUS.zmin) & (mock["ZOBS"] <= FP_CLUS.zmax)].copy()
+    mock = mock[(mock["ZOBS"] >= cfg.fp_clus.zmin) & (mock["ZOBS"] <= cfg.fp_clus.zmax)].copy()
 
     # Sub-sample to match data n(z)
     izs = np.clip(
-        np.digitize(mock["ZOBS"].to_numpy(), np.linspace(FP_CLUS.zmin, FP_CLUS.zmax, FP_CLUS.nzbin + 1)) - 1,
-        0, FP_CLUS.nzbin - 1,
+        np.digitize(mock["ZOBS"].to_numpy(), np.linspace(cfg.fp_clus.zmin, cfg.fp_clus.zmax, cfg.fp_clus.nzbin + 1)) - 1,
+        0, cfg.fp_clus.nzbin - 1,
     )
     keep = subfrac[izs] > np.random.uniform(size=len(mock))
     mock = mock.iloc[keep].copy()
@@ -531,12 +530,12 @@ def run_clustering_mock_loop(
     log.info("Generating clustering mocks …")
     all_x, all_y, all_z_gal, all_lde = [], [], [], []
 
-    #for phase in range(CONFIG.n_phases):
-    for phase in [FP_CLUS.phase]:
-        for real in range(CONFIG.n_reals):
-            fp_file = CONFIG.mock_fp_full_data.format(phase=phase, real=real)
-            out_file = CONFIG.mock_fp_clus_data.format(phase=phase, real=real)
-            if os.path.exists(out_file) and not FP_CLUS.overwrite:
+    #for phase in range(cfg.n_phases):
+    for phase in [cfg.fp_clus.phase]:
+        for real in range(cfg.n_reals):
+            fp_file = cfg.mock_fp_full_data.format(phase=phase, real=real)
+            out_file = cfg.mock_fp_clus_data.format(phase=phase, real=real)
+            if os.path.exists(out_file) and not cfg.fp_clus.overwrite:
                 log.info(f"Already exists: {out_file} — skipped")
                 continue
 
@@ -586,7 +585,7 @@ def write_random_catalogue(
     log.info("Building random catalogue with NN error assignment …")
 
     # Truncate random catalogue to rfact × expected galaxy count
-    n_target = FP_CLUS.rfact * int((nz_fp_mock * subfrac).sum())
+    n_target = cfg.fp_clus.rfact * int((nz_fp_mock * subfrac).sum())
     if len(fp_rand) > n_target:
         idx     = np.random.choice(len(fp_rand), n_target, replace=False)
         fp_rand = fp_rand.iloc[idx].reset_index(drop=True)
@@ -622,7 +621,7 @@ def write_random_catalogue(
     hdu = fits.BinTableHDU.from_columns(
         [fits.Column(name=n, format="D", array=a) for n, a in columns]
     )
-    mock_fp_clus_rand = CONFIG.mock_fp_clus_rand.format(phase=FP_CLUS.phase)
+    mock_fp_clus_rand = cfg.mock_fp_clus_rand.format(phase=cfg.fp_clus.phase)
     os.makedirs(os.path.dirname(mock_fp_clus_rand), exist_ok=True)
     log.info("Writing random catalogue → %s", mock_fp_clus_rand)
     hdu.writeto(mock_fp_clus_rand, overwrite=True)
@@ -654,19 +653,18 @@ def main() -> None:
         log.info("Random seed set to %d", args.seed)
 
     #-- Set config
-    cfg = load_config(args.config_file)
-    global CONFIG, FP_CLUS
-    CONFIG, FP_CLUS = cfg.CONFIG, cfg.FP_CLUS    
-    FP_CLUS.phase = args.phase
+    global cfg
+    cfg = load_config(args.config_file)  
+    cfg.fp_clus.phase = args.phase
 
 
-    log.info(f"=== DESI FP clustering mocks pipeline for phase {FP_CLUS.phase:03d} ===")
+    log.info(f"=== DESI FP clustering mocks pipeline for phase {cfg.fp_clus.phase:03d} ===")
 
     # 1. Load observed data and compute n(z) 
     bgs_rand, fp_data = load_observed_data()
 
     nz_fp_data = np.histogram(
-        fp_data["Z"], bins=FP_CLUS.nzbin, range=[FP_CLUS.zmin, FP_CLUS.zmax],
+        fp_data["Z"], bins=cfg.fp_clus.nzbin, range=[cfg.fp_clus.zmin, cfg.fp_clus.zmax],
         weights=fp_data["WEIGHT"],
     )[0]
 
@@ -678,8 +676,8 @@ def main() -> None:
 
     # 3. Sub-sampling fraction & logdist bias correction
     subfrac     = compute_subsampling_fraction(nz_fp_data, stats["nz_fp_mock"])
-    log.info("WARNING: not subsampling")
-    subfrac = subfrac*0 + 1.0
+    #log.info("WARNING: not subsampling")
+    #subfrac = subfrac*0 + 1.0
     logdist_fix = compute_logdist_bias_correction(stats)
 
     # 4. Build random catalogue

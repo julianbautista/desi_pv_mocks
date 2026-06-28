@@ -32,8 +32,7 @@ from scipy.spatial import KDTree
 # Configuration 
 # ---------------------------------------------------------------------------
 from config import load_config
-CONFIG = None 
-FP_FULL = None 
+cfg = None
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -52,18 +51,18 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 def fp_params():
     return np.array([
-        FP_FULL.a, FP_FULL.b, FP_FULL.rmean, FP_FULL.smean, FP_FULL.imean,
-        FP_FULL.sigma1, FP_FULL.sigma2, FP_FULL.sigma3,
+        cfg.fp_full.a, cfg.fp_full.b, cfg.fp_full.rmean, cfg.fp_full.smean, cfg.fp_full.imean,
+        cfg.fp_full.sigma1, cfg.fp_full.sigma2, cfg.fp_full.sigma3,
     ])
  
 def Mmean():
-    return 4.65 - 5.0 * FP_FULL.rmean - 2.5 * FP_FULL.imean - 2.5 * np.log10(2.0 * np.pi) - 15.0
+    return 4.65 - 5.0 * cfg.fp_full.rmean - 2.5 * cfg.fp_full.imean - 2.5 * np.log10(2.0 * np.pi) - 15.0
  
 def c():
-    return FP_FULL.rmean - FP_FULL.a * FP_FULL.smean - FP_FULL.b * FP_FULL.imean
+    return cfg.fp_full.rmean - cfg.fp_full.a * cfg.fp_full.smean - cfg.fp_full.b * cfg.fp_full.imean
  
 def dbins() :
-    return np.linspace(FP_FULL.dmin, FP_FULL.dmax, FP_FULL.nd, endpoint=True)
+    return np.linspace(cfg.fp_full.dmin, cfg.fp_full.dmax, cfg.fp_full.nd, endpoint=True)
  
  
 def _compute_covariance_terms(a, b, sigma1, sigma2, sigma3, k=0.0):
@@ -278,17 +277,17 @@ def compute_logdist(FPparams, fpmock):
     d_H   = np.outer(10.0**(-dbins_), fpmock["dz_cluster"].to_numpy())
     lmin  = (
         4.65 + 5.0 * np.log10(1.0 + fpmock["zobs"].to_numpy())
-        - FP_FULL.evo_corr * fpmock["zcos"].to_numpy()
+        - cfg.fp_full.evo_corr * fpmock["zcos"].to_numpy()
         + fpmock["kcorr_r"].to_numpy() + 10.0
         - 2.5 * np.log10(2.0 * np.pi)
-        + 5.0 * np.log10(d_H) - FP_FULL.mag_high
+        + 5.0 * np.log10(d_H) - cfg.fp_full.mag_high
     ) / 5.0
     lmax  = (
         4.65 + 5.0 * np.log10(1.0 + fpmock["zobs"].to_numpy())
-        - FP_FULL.evo_corr * fpmock["zcos"].to_numpy()
+        - cfg.fp_full.evo_corr * fpmock["zcos"].to_numpy()
         + fpmock["kcorr_r"].to_numpy() + 10.0
         - 2.5 * np.log10(2.0 * np.pi)
-        + 5.0 * np.log10(d_H) - FP_FULL.mag_low
+        + 5.0 * np.log10(d_H) - cfg.fp_full.mag_low
     ) / 5.0
  
     loglike = FP_func(
@@ -296,7 +295,7 @@ def compute_logdist(FPparams, fpmock):
         fpmock["zobs"].to_numpy(), fpmock["r"].to_numpy(),
         fpmock["s"].to_numpy(), fpmock["i"].to_numpy(),
         fpmock["er"].to_numpy(), fpmock["es"].to_numpy(), fpmock["ei"].to_numpy(),
-        np.ones(len(fpmock)), FP_FULL.smin, FP_FULL.smax,
+        np.ones(len(fpmock)), cfg.fp_full.smin, cfg.fp_full.smax,
         sumgals=False, chi_squared_only=False,
     )
  
@@ -305,7 +304,7 @@ def compute_logdist(FPparams, fpmock):
         FPparams,
         fpmock["zobs"].to_numpy(), fpmock["er"].to_numpy(),
         fpmock["es"].to_numpy(), fpmock["ei"].to_numpy(),
-        lmin, lmax, FP_FULL.smin, FP_FULL.smax,
+        lmin, lmax, cfg.fp_full.smin, cfg.fp_full.smax,
     )
     logger.info(f"FN_func computed in {time.time() - t0}")
  
@@ -399,7 +398,7 @@ def filter_mock(fpmock: pd.DataFrame) -> pd.DataFrame:
         ("initial", len(fpmock)),
     ]
  
-    fpmock = fpmock[(fpmock["zobs"] >= FP_FULL.zmin) & (fpmock["zobs"] <= FP_FULL.zmax)]
+    fpmock = fpmock[(fpmock["zobs"] >= cfg.fp_full.zmin) & (fpmock["zobs"] <= cfg.fp_full.zmax)]
     steps.append(("redshift", len(fpmock)))
  
     fpmock = fpmock[
@@ -412,29 +411,27 @@ def filter_mock(fpmock: pd.DataFrame) -> pd.DataFrame:
     steps.append(("ellipticity", len(fpmock)))
  
     #- v1 cuts
-    if CONFIG.data_fp_full_version == 'v1':
+    if cfg.data_fp_full_version == 'v1':
         fpmock = fpmock[
             (fpmock["col_obs"] > 0.68) &
             (fpmock["col_obs"] > 1.3 * (fpmock["app_mag"] - fpmock["mag_z"]) - 0.12) &
             (fpmock["col_obs"] < 2.0 * (fpmock["app_mag"] - fpmock["mag_z"]) - 0.15)
         ]
     # v2 cuts
-    elif CONFIG.data_fp_full_version == 'v2':
+    elif cfg.data_fp_full_version == 'v2':
         fpmock = fpmock[
             (fpmock["col_obs"] > 0.68) &
             (fpmock["col_obs"] > 0.85 * (fpmock["app_mag"] - fpmock["mag_z"]) + 0.30) &
             (fpmock["col_obs"] < 2.0 * (fpmock["app_mag"] - fpmock["mag_z"]) - 0.15)
         ]
     else:
-        logger.error(f" No color cuts defined for version {CONFIG.data_fp_full_version} !")
+        logger.error(f" No color cuts defined for version {cfg.data_fp_full_version} !")
     steps.append(("color", len(fpmock)))
  
-    fpmock = fpmock[(fpmock["app_mag"] > FP_FULL.mag_low) & (fpmock["app_mag"] < FP_FULL.mag_high)]
+    fpmock = fpmock[(fpmock["app_mag"] > cfg.fp_full.mag_low) & (fpmock["app_mag"] < cfg.fp_full.mag_high)]
     steps.append(("magnitude", len(fpmock)))
  
-    #mask = np.random.rand(len(fpmock)) > fpmock[CONFIG.comp_field].values
-    #fpmock = fpmock[~mask].reset_index(drop=True)
-    mask = np.random.rand(len(fpmock)) < fpmock[CONFIG.comp_field].values
+    mask = np.random.rand(len(fpmock)) < fpmock[cfg.comp_field].values
     fpmock = fpmock[mask]
     steps.append(("completeness", len(fpmock)))
  
@@ -453,7 +450,7 @@ def generate_fp_properties(fpmock: pd.DataFrame) -> pd.DataFrame:
     using the conditional distribution of the FP. 
     """
     k = 0.0
-    a, b, sigma1, sigma2, sigma3 = FP_FULL.a, FP_FULL.b, FP_FULL.sigma1, FP_FULL.sigma2, FP_FULL.sigma3
+    a, b, sigma1, sigma2, sigma3 = cfg.fp_full.a, cfg.fp_full.b, cfg.fp_full.sigma1, cfg.fp_full.sigma2, cfg.fp_full.sigma3
     cov = _compute_covariance_terms(a, b, sigma1, sigma2, sigma3, k)
  
     sigmar2, sigmas2, sigmai2 = cov["sigmar2"], cov["sigmas2"], cov["sigmai2"]
@@ -463,8 +460,8 @@ def generate_fp_properties(fpmock: pd.DataFrame) -> pd.DataFrame:
     sigmaMs  = -5.0 * sigmars - 2.5 * sigmasi
     sigmaMi  = -5.0 * sigmari - 2.5 * sigmai2
  
-    hats = FP_FULL.smean + sigmaMs / sigmaM2 * (fpmock["abs_mag"].to_numpy() - Mmean())
-    hati = FP_FULL.imean + sigmaMi / sigmaM2 * (fpmock["abs_mag"].to_numpy() - Mmean())
+    hats = cfg.fp_full.smean + sigmaMs / sigmaM2 * (fpmock["abs_mag"].to_numpy() - Mmean())
+    hati = cfg.fp_full.imean + sigmaMi / sigmaM2 * (fpmock["abs_mag"].to_numpy() - Mmean())
     sigma_cond = np.array([
         [sigmas2 - sigmaMs**2 / sigmaM2,       sigmasi - sigmaMs * sigmaMi / sigmaM2],
         [sigmasi - sigmaMs * sigmaMi / sigmaM2, sigmai2 - sigmaMi**2 / sigmaM2],
@@ -583,7 +580,7 @@ def fit_fundamental_plane(fpmock: pd.DataFrame) -> tuple:
         fpmock["zobs"].to_numpy(), fpmock["r"].to_numpy(),
         fpmock["s"].to_numpy(), fpmock["i"].to_numpy(),
         fpmock["er"].to_numpy(), fpmock["es"].to_numpy(), fpmock["ei"].to_numpy(),
-        fpmock["Sn"].to_numpy(), FP_FULL.smin, FP_FULL.smax,
+        fpmock["Sn"].to_numpy(), cfg.fp_full.smin, cfg.fp_full.smax,
         sumgals=False, chi_squared_only=True,
     )[0]
     dof = np.sum(chi_sq) / (len(fpmock) - 8.0)
@@ -606,7 +603,7 @@ def fit_fundamental_plane(fpmock: pd.DataFrame) -> tuple:
                 data_fit["s"].to_numpy(), data_fit["i"].to_numpy(),
                 data_fit["er"].to_numpy(), data_fit["es"].to_numpy(),
                 data_fit["ei"].to_numpy(), data_fit["Sn"].to_numpy(),
-                FP_FULL.smin, FP_FULL.smax,
+                cfg.fp_full.smin, cfg.fp_full.smax,
             ),
             maxiter=10000,
             tol=1.0e-6,
@@ -618,7 +615,7 @@ def fit_fundamental_plane(fpmock: pd.DataFrame) -> tuple:
             fpmock["zobs"].to_numpy(), fpmock["r"].to_numpy(),
             fpmock["s"].to_numpy(), fpmock["i"].to_numpy(),
             fpmock["er"].to_numpy(), fpmock["es"].to_numpy(), fpmock["ei"].to_numpy(),
-            fpmock["Sn"].to_numpy(), FP_FULL.smin, FP_FULL.smax,
+            fpmock["Sn"].to_numpy(), cfg.fp_full.smin, cfg.fp_full.smax,
             sumgals=False, chi_squared_only=True,
         )[0]
         dof       = np.sum(chi_sq) / (len(fpmock) - 8.0)
@@ -646,19 +643,19 @@ def compute_selection_weights(fpmock, cosmo, lumred_spline):
     Computes the weight Sn = fraction of survey volume in which each galaxy 
     would be observed given its magniture 
     """
-    Vmin = (1.0 + FP_FULL.zmin)**3 * cosmo.comoving_distance(FP_FULL.zmin).value**3
-    Vmax = (1.0 + FP_FULL.zmax)**3 * cosmo.comoving_distance(FP_FULL.zmax).value**3
+    Vmin = (1.0 + cfg.fp_full.zmin)**3 * cosmo.comoving_distance(cfg.fp_full.zmin).value**3
+    Vmax = (1.0 + cfg.fp_full.zmax)**3 * cosmo.comoving_distance(cfg.fp_full.zmax).value**3
  
     Dlim = 10.0**(
-        (FP_FULL.mag_high - fpmock["app_mag"].to_numpy()
+        (cfg.fp_full.mag_high - fpmock["app_mag"].to_numpy()
          + 5.0 * np.log10(fpmock["dz"].to_numpy())
          + 5.0 * np.log10(1.0 + fpmock["zobs"].to_numpy())) / 5.0
     )
     zlim = lumred_spline(Dlim)
  
     Sn = np.where(
-        zlim >= FP_FULL.zmax, 1.0,
-        np.where(zlim < FP_FULL.zmin, 0.0, (Dlim**3 - Vmin) / (Vmax - Vmin)),
+        zlim >= cfg.fp_full.zmax, 1.0,
+        np.where(zlim < cfg.fp_full.zmin, 0.0, (Dlim**3 - Vmin) / (Vmax - Vmin)),
     )
     fpmock = fpmock.copy()
     fpmock["Sn"] = Sn
@@ -736,14 +733,12 @@ def main() -> None:
     args = parse_args()
     phase, real = args.phase, args.real
     logger.info("=== Pipeline FP  phase=%03d  real=%03d ===", phase, real)
- 
+    
+    global cfg
     cfg = load_config(args.config_file)
-    global CONFIG, FP_FULL
-    CONFIG = cfg.CONFIG
-    FP_FULL = cfg.FP_FULL
- 
-    outfile = CONFIG.mock_fp_full_data.format(phase=phase, real=real)
-    if os.path.exists(outfile) and not FP_FULL.overwrite:
+    
+    outfile = cfg.mock_fp_full_data.format(phase=phase, real=real)
+    if os.path.exists(outfile) and not cfg.fp_full.overwrite:
         logger.info("Already exists: %s — skipped", outfile)
         return
 
@@ -753,15 +748,15 @@ def main() -> None:
     lumred_spline = sp.interpolate.interp1d((1.0 + zvals) * cosmo.comoving_distance(zvals), zvals)
  
     # Corrections K (cosmologie Planck15 as in the original mocks)
-    k_r = GAMA_KCorrection(Planck15, CONFIG.kcorr_r_path)
-    k_g = GAMA_KCorrection(Planck15, CONFIG.kcorr_g_path)
+    k_r = GAMA_KCorrection(Planck15, cfg.kcorr_r_path)
+    k_g = GAMA_KCorrection(Planck15, cfg.kcorr_g_path)
  
     # --- Reading reference data catalogs ---
-    spec   = load_spec_data(CONFIG.spec_csv, usecols=CONFIG.spec_keys)
-    fp_data = load_fp_catalog(CONFIG.data_fp_full)
+    spec   = load_spec_data(cfg.spec_csv, usecols=cfg.spec_keys)
+    fp_data = load_fp_catalog(cfg.data_fp_full)
  
     # --- Reading mock ---
-    infile = CONFIG.mock_bgs_spec_data.format(phase=phase, real=real)
+    infile = cfg.mock_bgs_spec_data.format(phase=phase, real=real)
     logger.info(f"Reading : {infile}")
     fpmock = load_mock_hdf5(infile, spec)
  
@@ -783,7 +778,7 @@ def main() -> None:
  
     # --- Final cut on dispersion --- 
     fpmock = fpmock[
-        (fpmock["s"] >= FP_FULL.smin) & (fpmock["s"] <= FP_FULL.smax)
+        (fpmock["s"] >= cfg.fp_full.smin) & (fpmock["s"] <= cfg.fp_full.smax)
     ].reset_index(drop=True)
     logger.info(f"After dispersion cut : {len(fpmock)} galaxies")
  
@@ -793,7 +788,7 @@ def main() -> None:
     # --- Fitting for the Fundamenta Plane ---
     FPparams, data_fit, badcount = fit_fundamental_plane(fpmock)
     fpmock = data_fit
-    logger.info(f"Mock after final outlier rejection :{len(fpmock)} galaxies")
+    logger.info(f"Mock after final outlier rejection : {len(fpmock)} galaxies")
  
     # --- Log-distances ---
     logdist_results = compute_logdist(FPparams, fpmock)
@@ -807,20 +802,19 @@ def main() -> None:
             fpmock["zobs"].to_numpy(), fpmock["r"].to_numpy(),
             fpmock["s"].to_numpy(), fpmock["i"].to_numpy(),
             fpmock["er"].to_numpy(), fpmock["es"].to_numpy(), fpmock["ei"].to_numpy(),
-            fpmock["Sn"].to_numpy(), FP_FULL.smin, FP_FULL.smax,
+            fpmock["Sn"].to_numpy(), cfg.fp_full.smin, cfg.fp_full.smax,
             sumgals=False, chi_squared_only=True,
         )[0]
     ))
     write_output_catalog(outfile, fpmock, FPparams, chi2_final, badcount)
-    logger.info("=== Pipeline done ===")
  
     logger.info("=== Updating permissions ===")
     result = subprocess.run(
-        ["chgrp", "-R", "desi", CONFIG.mock_fp_full_dir],
+        ["chgrp", "-R", "desi", cfg.mock_fp_full_dir],
         check=True,
     )
-    print(result)
- 
+    logger.info("=== Pipeline done ===")
+
 
 
 if __name__ == "__main__":

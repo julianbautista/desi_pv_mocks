@@ -1,124 +1,129 @@
-CONFIG:
-  light_speed: 299792.458  # km/s
+#-- General configuration 
 
-  n_phases: 1
-  n_phases_rand: 1
-  n_reals: 2
-  n_rands: 2
-  comp_field: "Y3_COMP"  # completeness field: Y1_COMP, Y3_COMP, or Y5
-  zsnap: 0.10 
+light_speed: 299792.458  # km/s
 
-  version_base: "v3.0"
-  version_spec: "v3.0"
-  version_clus: "v3.0"
-  version_fp_full: "v3.0"
-  version_fp_clus: "v3.0"
-  version_tf_full: "v3.0"
-  version_tf_clus: "v3.0"
-  spec_name: "loa"
+n_phases: 25
+n_phases_rand: 3
+n_reals: 27
+n_rands: 27
+comp_field: "Y3_COMP"  # completeness field: Y1_COMP, Y3_COMP, or Y5
+zsnap: 0.10 
 
-  mock_dir: "/global/cfs/cdirs/desi/science/td/pv/mocks/DR2"
+version_bgs_base: "v3.0"
+version_bgs_spec: "v3.0"
+version_bgs_clus: "v3.0"
+version_fp_full: "v3.0"
+version_fp_clus: "v3.0"
+version_tf_full: "v3.0"
+version_tf_clus: "v3.0"
 
-  mock_bgs_base_dir: "{mock_dir}/BGS_base/{version_base}"
-  mock_bgs_base_data: "{mock_bgs_base_dir}/data/BGS_PV_AbacusSummit_base_c000_ph{{phase:03d}}_r{{real:03d}}_zsnap0.10_zmax0.11.dat.hdf5"
-  mock_bgs_base_rand: "{mock_bgs_base_dir}/rand/BGS_PV_AbacusSummit_base_c000_ph{{phase:03d}}_r{{real:03d}}_zsnap0.10_zmax0.11.ran.hdf5"
+mock_dir: "/global/cfs/cdirs/desi/science/td/pv/mocks/DR2"
 
-  mock_bgs_spec_dir: "{mock_dir}/BGS_{spec_name}/{version_spec}"
-  mock_bgs_spec_data: "{mock_bgs_spec_dir}/BGS_PV_AbacusSummit_spec_c000_ph{{phase:03d}}_r{{real:03d}}.dat.hdf5"
-  mock_bgs_spec_plot_dir: "/global/cfs/cdirs/desi/science/td/pv/mocks/DR2/BGS_{spec_name}/{version_spec}/plots/"
+mock_bgs_base_dir: "{mock_dir}/BGS_base/{version_bgs_base}"
+mock_bgs_base_data: "{mock_bgs_base_dir}/data/BGS_PV_AbacusSummit_base_c000_ph{{phase:03d}}_r{{real:03d}}_zsnap0.10_zmax0.11.dat.hdf5"
+mock_bgs_base_rand: "{mock_bgs_base_dir}/rand/BGS_PV_AbacusSummit_base_c000_ph{{phase:03d}}_r{{real:03d}}_zsnap0.10_zmax0.11.ran.hdf5"
 
-  mock_bgs_clus_dir: "{mock_dir}/BGS_clustering/{version_clus}"
-  mock_bgs_clus_data: "{mock_bgs_clus_dir}/data/BGS_PV_AbacusSummit_clustering_c000_ph{{phase:03d}}_r{{real:03d}}.fits"
-  mock_bgs_clus_rand: "{mock_bgs_clus_dir}/rand/BGS_PV_AbacusSummit_clustering_random{n_rands}x.fits"
+mock_bgs_spec_dir: "{mock_dir}/BGS_{spec_name}/{version_bgs_spec}"
+mock_bgs_spec_data: "{mock_bgs_spec_dir}/BGS_PV_AbacusSummit_spec_c000_ph{{phase:03d}}_r{{real:03d}}.dat.hdf5"
+mock_bgs_spec_plot_dir: "{mock_bgs_spec_dir}/plots"
 
-  mock_fp_full_dir: "{mock_dir}/FP_mocks/full_mocks/{version_fp_full}"
-  mock_fp_full_data: "{mock_fp_full_dir}/FP_AbacusSummit_c000_ph{{phase:03d}}_r{{real:03d}}.fits"
+mock_bgs_clus_dir: "{mock_dir}/BGS_clustering/{version_bgs_clus}"
+mock_bgs_clus_data: "{mock_bgs_clus_dir}/data/BGS_PV_AbacusSummit_clustering_c000_ph{{phase:03d}}_r{{real:03d}}.fits"
+mock_bgs_clus_rand: "{mock_bgs_clus_dir}/rand/BGS_PV_AbacusSummit_clustering_random{n_rands}x_ph{{phase:03d}}.fits"
 
-  mock_fp_clus_dir: "{mock_dir}/FP_mocks/clustering_mocks/{version_fp_clus}"
-  mock_fp_clus_data: "{mock_fp_clus_dir}/data/FP_AbacusSummit_clustering_c000_ph{{phase:03d}}_r{{real:03d}}.fits"
-  mock_fp_clus_rand: "{mock_fp_clus_dir}/rand/FP_AbacusSummit_clustering_random{n_rands}x.fits"
+mock_fp_full_dir: "{mock_dir}/FP_mocks/full_mocks/{version_fp_full}"
+mock_fp_full_data: "{mock_fp_full_dir}/FP_AbacusSummit_c000_ph{{phase:03d}}_r{{real:03d}}.fits"
 
-  mock_tf_full_dir: "{mock_dir}/TF_mocks/full_mocks/{version_tf_full}"
-  mock_tf_full_data: "{mock_tf_full_dir}/TF_AbacusSummit_c000_ph{{phase:03d}}_r{{real:03d}}.fits"
+mock_fp_clus_dir: "{mock_dir}/FP_mocks/clustering_mocks/{version_fp_clus}"
+mock_fp_clus_data: "{mock_fp_clus_dir}/data/FP_AbacusSummit_clustering_c000_ph{{phase:03d}}_r{{real:03d}}.fits"
+mock_fp_clus_rand: "{mock_fp_clus_dir}/rand/FP_AbacusSummit_clustering_random{n_rands}x_ph{{phase:03d}}.fits"
 
-  mock_tf_clus_dir: "{mock_dir}/TF_mocks/clustering_mocks/{version_tf_clus}"
-  mock_tf_clus_data: "{mock_tf_clus_dir}/data/TF_AbacusSummit_clustering_c000_ph{{phase:03d}}_r{{real:03d}}.fits"
-  mock_tf_clus_rand: "{mock_tf_clus_dir}/rand/TF_AbacusSummit_clustering_random{n_rands}x.fits"
+mock_tf_full_dir: "{mock_dir}/TF_mocks/full_mocks/{version_tf_full}"
+mock_tf_full_data: "{mock_tf_full_dir}/TF_AbacusSummit_c000_ph{{phase:03d}}_r{{real:03d}}.fits"
 
-  data_dir: "/global/cfs/cdirs/desi/science/td/pv"
+mock_tf_clus_dir: "{mock_dir}/TF_mocks/clustering_mocks/{version_tf_clus}"
+mock_tf_clus_data: "{mock_tf_clus_dir}/data/TF_AbacusSummit_clustering_c000_ph{{phase:03d}}_r{{real:03d}}.fits"
+mock_tf_clus_rand: "{mock_tf_clus_dir}/rand/TF_AbacusSummit_clustering_random{n_rands}x_ph{{phase:03d}}.fits"
 
-  data_bgs_clus_data: "{data_dir}/bgsclustering/Y3/BGS_BRIGHT_clustering_forPV_data.fits"
-  data_bgs_clus_rand: "{data_dir}/bgsclustering/Y3/BGS_BRIGHT_clustering_forPV_random.fits"
+#-- Data paths
+data_dir: "/global/cfs/cdirs/desi/science/td/pv"
 
-  data_fp_full_version: "v1"
-  data_n_rand: 20
-  data_fp_full: "{data_dir}/fpgalaxies/Y3/{data_fp_full_version}/FP_pv_cat_{data_fp_full_version}.csv"
-  data_fp_clus_data: "{data_dir}/fpgalaxies/Y3/{data_fp_full_version}/FP_clustering_data_{data_fp_full_version}.fits"
-  data_fp_clus_rand: "{data_dir}/fpgalaxies/Y3/{data_fp_full_version}/FP_clustering_random20_{data_fp_full_version}.fits"
+data_bgs_clus_data: "{data_dir}/bgsclustering/Y3/BGS_BRIGHT_clustering_forPV_data.fits"
+data_bgs_clus_rand: "{data_dir}/bgsclustering/Y3/BGS_BRIGHT_clustering_forPV_random.fits"
 
-  data_tf_full_version: "v3"  # By Sara Moore
-  data_tf_full: "{data_dir}/tfgalaxies/Y3/DESI-DR2_TF_pv_cat_{data_tf_full_version}.fits"
-  data_tf_pickle: "{data_dir}/tfgalaxies/Y3/..."
-  data_tf_clus_data: "{data_dir}/tfgalaxies/Y3/TF_clustering_data_{data_tf_full_version}.fits"
-  data_tf_clus_rand: "{data_dir}/tfgalaxies/Y3/TF_clustering_random20_{data_tf_full_version}.fits"
+data_fp_full_version: "v1"
+data_n_rand: 20
+data_fp_full: "{data_dir}/fpgalaxies/Y3/{data_fp_full_version}/FP_pv_cat_{data_fp_full_version}.csv"
+data_fp_clus_data: "{data_dir}/fpgalaxies/Y3/{data_fp_full_version}/FP_clustering_data_{data_fp_full_version}.fits"
+data_fp_clus_rand: "{data_dir}/fpgalaxies/Y3/{data_fp_full_version}/FP_clustering_random20_{data_fp_full_version}.fits"
 
-  kcorr_file: "/global/cfs/cdirs/desi/science/td/pv/mocks/BGS_base/k_corr_rband_z01.dat"
-  kcorr_r_path: "/global/cfs/cdirs/desi/science/td/pv/mocks/FP_mocks/k_corr_rband_z01.dat"
-  kcorr_g_path: "/global/cfs/cdirs/desi/science/td/pv/mocks/FP_mocks/k_corr_gband_z01.dat"
+data_tf_full_version: "v3"  # By Sara Moore
+data_tf_full: "{data_dir}/tfgalaxies/Y3/DESI-DR2_TF_pv_cat_{data_tf_full_version}.fits"
+data_tf_pickle: "{data_dir}/tfgalaxies/Y3/..."
+data_tf_clus_data: "{data_dir}/tfgalaxies/Y3/TF_clustering_data_{data_tf_full_version}.fits"
+data_tf_clus_rand: "{data_dir}/tfgalaxies/Y3/TF_clustering_random20_{data_tf_full_version}.fits"
 
-  sga_file: "/global/cfs/cdirs/cosmo/data/sga/2020/SGA-2020.fits"
-  dust_map: "/global/cfs/cdirs/desi/public/papers/mws/desi_dust/y2/v1/maps/desi_dust_gr_512.fits"
+kcorr_file: "/global/cfs/cdirs/desi/science/td/pv/mocks/BGS_base/k_corr_rband_z01.dat"
+kcorr_r_path: "/global/cfs/cdirs/desi/science/td/pv/mocks/FP_mocks/k_corr_rband_z01.dat"
+kcorr_g_path: "/global/cfs/cdirs/desi/science/td/pv/mocks/FP_mocks/k_corr_gband_z01.dat"
 
-  spec_csv: "/global/cfs/cdirs/desi/science/td/pv/redshift_data/Y3/loa_fullsweep_catalogue_z010.csv"
+sga_file: "/global/cfs/cdirs/cosmo/data/sga/2020/SGA-2020.fits"
+dust_map: "/global/cfs/cdirs/desi/public/papers/mws/desi_dust/y2/v1/maps/desi_dust_gr_512.fits"
 
-  spec_keys:
-    - targetid
-    - survey
-    - program
-    - healpix
-    - morphtype
-    - z
-    - zwarn
-    - mag_r
-    - flux_g
-    - flux_r
-    - flux_z
-    - mag_g
-    - mag_z
-    - sersic
-    - sersic_ivar
-    - circ_radius
-    - circ_radius_err
-    - pos_angle
-    - BA_ratio
+#-- Spectroscopic information from real data to be matched to mocks
+spec_name: "loa"
+spec_csv: "/global/cfs/cdirs/desi/science/td/pv/redshift_data/Y3/loa_fullsweep_catalogue_z010.csv"
+spec_keys:
+  - targetid
+  - survey
+  - program
+  - healpix
+  - morphtype
+  - z
+  - zwarn
+  - mag_r
+  - flux_g
+  - flux_r
+  - flux_z
+  - mag_g
+  - mag_z
+  - sersic
+  - sersic_ivar
+  - circ_radius
+  - circ_radius_err
+  - pos_angle
+  - BA_ratio
+#  - sfr
+#  - logmstar
 
-  match_keys:
-    - targetid
-    - survey
-    - program
-    - healpix
+match_keys:
+  - targetid
+  - survey
+  - program
+  - healpix
 
-
-BGS_SPEC:
-  overwrite: true
+#- BGS mocks with assigned spectroscopic quantities
+bgs_spec:
+  overwrite: false
   deltachi2_min: 30.0
   zmax: 0.11
   r_mag_lim: 19.7
   col_min: -0.5
   col_max: 1.5
-  do_diagnostic_plots: false
+  do_diagnostic_plots: true
 
-
-BGS_CLUS:
+#- BGS clustering mocks for density field
+bgs_clus:
   overwrite: false
+  phase: -1
   zmin: 0.01
   zmax: 0.1
   appmaglim: 20.0 
   absmaglim: -19.0 #--  -17.7
   ngrid: 128
 
-
-FP_FULL:
+#- Fundamental Plane full mocks
+fp_full:
   overwrite: true
 
   # FP parameters (fit to data)
@@ -151,8 +156,8 @@ FP_FULL:
   dmax: 1.4
   nd: 1001
 
-
-TF_FULL:
+#- Tully-Fisher full mocks
+tf_full:
   overwrite: false
 
   # Matching
@@ -173,8 +178,8 @@ TF_FULL:
   # Velocity error floor [km/s]
   logv_err_floor: 7.0
 
-
-FP_CLUS:
+#- Fundamental Plane clustering mocks for velocity field
+fp_clus:
   overwrite: true
   phase: -1
   zmin: 0.01
@@ -184,7 +189,8 @@ FP_CLUS:
   nzbin: 36
 
 
-TF_CLUS:
+#- Tully-fisher clustering mocks for velocity field
+tf_clus:
   overwrite: true
   zmin: 0.01
   zmax: 0.10
