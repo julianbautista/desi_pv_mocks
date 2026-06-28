@@ -7,6 +7,7 @@ Also produces a random catalogue by downsampling Chris Blake's BGS randoms.
 """
 
 import argparse
+import subprocess
 import os
 import h5py
 import logging
@@ -700,6 +701,13 @@ def main() -> None:
         fp_rand_cat, gal_x, gal_y, gal_z, gal_lde,
         ndensweigrid, npvweigrid, geom, 
         stats["nz_fp_mock"], subfrac,
+    )
+
+ 
+    log.info("=== Updating permissions ===")
+    result = subprocess.run(
+        ["chgrp", "-R", "desi", cfg.mock_fp_clus_dir],
+        check=True,
     )
 
     log.info("=== Pipeline complete ===")
