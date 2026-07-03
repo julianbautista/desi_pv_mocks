@@ -3,9 +3,7 @@
 light_speed: 299792.458  # km/s
 
 n_phases: 25
-n_phases_rand: 3
 n_reals: 27
-n_rands: 27
 comp_field: "Y3_COMP"  # completeness field: Y1_COMP, Y3_COMP, or Y5
 zsnap: 0.10 
 
@@ -29,27 +27,27 @@ mock_bgs_spec_plot_dir: "{mock_bgs_spec_dir}/plots"
 
 mock_bgs_clus_dir: "{mock_dir}/BGS_clustering/{version_bgs_clus}"
 mock_bgs_clus_data: "{mock_bgs_clus_dir}/data/BGS_PV_AbacusSummit_clustering_c000_ph{{phase:03d}}_r{{real:03d}}.fits"
-mock_bgs_clus_rand: "{mock_bgs_clus_dir}/rand/BGS_PV_AbacusSummit_clustering_random{n_rands}x_ph{{phase:03d}}.fits"
+mock_bgs_clus_rand: "{mock_bgs_clus_dir}/rand/BGS_PV_AbacusSummit_clustering_random{n_reals}x_ph{{phase:03d}}.fits"
 
 mock_fp_full_dir: "{mock_dir}/FP_mocks/full_mocks/{version_fp_full}"
 mock_fp_full_data: "{mock_fp_full_dir}/FP_AbacusSummit_c000_ph{{phase:03d}}_r{{real:03d}}.fits"
 
 mock_fp_clus_dir: "{mock_dir}/FP_mocks/clustering_mocks/{version_fp_clus}"
 mock_fp_clus_data: "{mock_fp_clus_dir}/data/FP_AbacusSummit_clustering_c000_ph{{phase:03d}}_r{{real:03d}}.fits"
-mock_fp_clus_rand: "{mock_fp_clus_dir}/rand/FP_AbacusSummit_clustering_random{n_rands}x_ph{{phase:03d}}.fits"
+mock_fp_clus_rand: "{mock_fp_clus_dir}/rand/FP_AbacusSummit_clustering_random{n_reals}x_ph{{phase:03d}}.fits"
 
 mock_tf_full_dir: "{mock_dir}/TF_mocks/full_mocks/{version_tf_full}"
 mock_tf_full_data: "{mock_tf_full_dir}/TF_AbacusSummit_c000_ph{{phase:03d}}_r{{real:03d}}.fits"
 
 mock_tf_clus_dir: "{mock_dir}/TF_mocks/clustering_mocks/{version_tf_clus}"
 mock_tf_clus_data: "{mock_tf_clus_dir}/data/TF_AbacusSummit_clustering_c000_ph{{phase:03d}}_r{{real:03d}}.fits"
-mock_tf_clus_rand: "{mock_tf_clus_dir}/rand/TF_AbacusSummit_clustering_random{n_rands}x_ph{{phase:03d}}.fits"
+mock_tf_clus_rand: "{mock_tf_clus_dir}/rand/TF_AbacusSummit_clustering_random{n_reals}x_ph{{phase:03d}}.fits"
 
 #-- Data paths
 data_dir: "/global/cfs/cdirs/desi/science/td/pv"
 
-data_bgs_clus_data: "{data_dir}/bgsclustering/Y3/BGS_BRIGHT_clustering_forPV_data.fits"
-data_bgs_clus_rand: "{data_dir}/bgsclustering/Y3/BGS_BRIGHT_clustering_forPV_random.fits"
+data_bgs_clus_data: "{data_dir}/bgsclustering/Y3/BGS_BRIGHT_clustering_forPV_data_Mr_lt_-19.0.fits"
+data_bgs_clus_rand: "{data_dir}/bgsclustering/Y3/BGS_BRIGHT_clustering_forPV_random_Mr_lt_-19.0.fits"
 
 data_fp_full_version: "v1"
 data_n_rand: 20
@@ -114,10 +112,13 @@ bgs_spec:
 
 #- BGS clustering mocks for density field
 bgs_clus:
-  overwrite: false
+  overwrite: true
   phase: -1
+  subsample_nz: true # -- subsample to match data n(z)
+  comp_min: 0.5
   zmin: 0.01
-  zmax: 0.1
+  zmax: 0.10
+  nzbin: 36
   appmaglim: 20.0 
   absmaglim: -19.0 #--  -17.7
   ngrid: 128
