@@ -122,6 +122,7 @@ bgs_clus:
   appmaglim: 20.0 
   absmaglim: -19.0 #--  -17.7
   ngrid: 128
+  power_dd_fkp: 1600.0
 
 #- Fundamental Plane full mocks
 fp_full:
@@ -142,6 +143,7 @@ fp_full:
   mag_high: 19.0 #- it's 18.0 for real data
   zmin: 0.0033
   zmax: 0.1
+  comp_min: 0.5
   smin: 1.6989700043360187  # log10(50.0)
   smax: 2.6232492903979003  # log10(420.0)
 
@@ -185,9 +187,11 @@ fp_clus:
   phase: -1
   zmin: 0.01
   zmax: 0.10
+  comp_min: 0.5
   rfact: 20
   ngrid: 128
   nzbin: 36
+  power_vv_fkp: 5e9 
 
 
 #- Tully-fisher clustering mocks for velocity field
@@ -195,6 +199,8 @@ tf_clus:
   overwrite: true
   zmin: 0.01
   zmax: 0.10
+  comp_min: 0.5
   rfact: 20
   ngrid: 128
   nzbin: 36
+  power_vv_fkp: 5e9 

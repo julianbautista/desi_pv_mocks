@@ -42,7 +42,7 @@ mock_tf_full_data: "{mock_tf_full_dir}/TF_extended_AbacusSummit_base_c000_ph{{ph
 
 mock_tf_clus_dir: "{mock_dir}/TF_mocks/clustering_mocks/{version_tf_clus}"
 mock_tf_clus_data: "{mock_tf_clus_dir}/data/TF_AbacusSummit_clustering_c000_ph{{phase:03d}}_r{{real:03d}}.fits"
-mock_tf_clus_rand: "{mock_tf_clus_dir}/rand/TF_AbacusSummit_clustering_random{n_rands}x.fits"
+mock_tf_clus_rand: "{mock_tf_clus_dir}/rand/TF_AbacusSummit_clustering_random{n_rands}x_ph{{phase:03d}}.fits"
 
 #-- Data paths
 
