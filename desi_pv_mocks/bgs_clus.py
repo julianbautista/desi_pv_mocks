@@ -18,11 +18,12 @@ from astropy.io import fits
 from astropy.table import Table
 from scipy.signal import savgol_filter
 
+from . import utils
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-from config import load_config
+from .config import load_config
 cfg = None
 
 # ---------------------------------------------------------------------------
@@ -58,45 +59,11 @@ def apply_selection(redshift, app_mag, abs_mag,
             mask &= subsample
     return mask 
  
-def radec_to_xyz(ra_deg: np.ndarray, dec_deg: np.ndarray, dist: np.ndarray) -> np.ndarray:
-    """Convert (RA, Dec, comoving distance) → Cartesian (x, y, z). Returns (3, N)."""
-    ra  = np.radians(ra_deg)
-    dec = np.radians(dec_deg)
-    x = dist * np.cos(dec) * np.cos(ra)
-    y = dist * np.cos(dec) * np.sin(ra)
-    z = dist * np.sin(dec)
-    return np.stack([x, y, z])
-
-#def radec_z_to_xyz(ra_deg, dec_deg, redshift, cosmo):
-#    """Convert (RA, Dec, z) to comoving Cartesian coordinates (Mpc/h)."""
-#    dist = cosmo.comoving_distance(redshift).value
-#    ra_rad = np.radians(ra_deg)
-#    dec_rad = np.radians(dec_deg)
-#    x = dist * np.cos(dec_rad) * np.cos(ra_rad)
-#    y = dist * np.cos(dec_rad) * np.sin(ra_rad)
-#    z = dist * np.sin(dec_rad)
-#    return x, y, z
- 
- 
-def build_grid_box(distmax, ngrid):
-    """Return grid parameters for a cube enclosing the survey volume."""
-    side = 2.0 * distmax
-    d = side / ngrid
-    origin = distmax          # offset so coordinates are centred at the origin
-    lims = np.linspace(0.0, side, ngrid + 1) - origin
-    return dict(ngrid=ngrid, side=side, d=d, origin=origin, dvol=d**3, lims=lims)
- 
- 
 def make_fits_table(**columns):
     """Build an astropy BinTableHDU from keyword-argument {name: array} pairs."""
     cols = [fits.Column(name=k, format="D", array=v) for k, v in columns.items()]
     return fits.BinTableHDU.from_columns(cols)
- 
- 
-def safe_digitize(values, edges, n):
-    """Return grid indices clipped to [0, n-1] to guard against boundary objects."""
-    return np.clip(np.digitize(values, edges) - 1, 0, n - 1)
- 
+
  
 def write_ndens_grid(path, zmin, zmax, box, grid):
     """Write the number-density grid to a plain text file."""
@@ -137,38 +104,6 @@ def load_observed_data():
     #log.info("  FP  data: %d galaxies | FP  rand: %d", len(fp_data), len(fp_rand))
     return bgs_data#, bgs_rand
 
-def get_density_mesh(pos, box, weights=None, normalize=False):
-    ngrid = box["ngrid"]
-    s = box["side"]
-
-    wingrid, _ = np.histogramdd(
-        pos.T, 
-        weights=weights,
-        bins=(ngrid, ngrid, ngrid),
-        range=((-s/2, s/2), (-s/2, s/2), (-s/2, s/2)),
-    )
-    ndensgrid = (wingrid/ box["dvol"]) 
-    if normalize:
-        ndensgrid /= wingrid.sum()
-
-    return ndensgrid
-
-def get_mesh_value(ndensgrid, pos, box):
-    # Sample 3d density grid at galaxy positions 
-    ix = safe_digitize(pos[0], box["lims"], box['ngrid'])
-    iy = safe_digitize(pos[1], box["lims"], box['ngrid'])
-    iz = safe_digitize(pos[2], box["lims"], box['ngrid'])
-    ndens = ndensgrid[ix, iy, iz]
-    return ndens
-
-def compute_nz(z, zbins, cosmo, frac_sky, weights=None, normalize=False):
-    """Compute n(z) in units of [Mpc/h]^-3 from redshifts and weights."""
-
-    zvol = (cosmo.comoving_volume(zbins[1:]).value-cosmo.comoving_volume(zbins[:-1]).value)
-    nz, _ = np.histogram(z, bins=zbins, weights=weights)
-    if normalize:
-        nz = nz / nz.sum()
-    return nz/zvol/frac_sky 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -203,7 +138,7 @@ def main():
 
     cosmo = FlatLambdaCDM(H0=100, Om0=0.3151)
     distmax = cosmo.comoving_distance(cfg.bgs_clus.zmax).value
-    box = build_grid_box(distmax, cfg.bgs_clus.ngrid)
+    box = utils.build_grid_box(distmax, cfg.bgs_clus.ngrid)
     zbins = np.linspace(cfg.bgs_clus.zmin, cfg.bgs_clus.zmax, cfg.bgs_clus.nzbin + 1)
 
     # ------------------------------------------------------------------
@@ -266,11 +201,11 @@ def main():
     log.info(f"Mean randoms per realisation/phase: {n_avg:.1f}")
     log.info(f"Mean sky fraction per realisation/phase: {frac_sky_avg:.3f}")
 
-    pos_ran = radec_to_xyz(ra_ran, dec_ran, dist_ran)
+    pos_ran = utils.radec_to_xyz(ra_ran, dec_ran, dist_ran)
  
     #-- Compute number density in a 3D mesh with the stacked randoms
-    ndensgrid = n_avg * get_density_mesh(pos_ran, box, normalize=True)
-    ndens_ran = get_mesh_value(ndensgrid, pos_ran, box)
+    ndensgrid = n_avg * utils.build_density_mesh(pos_ran, box, normalize=True)
+    ndens_ran = utils.get_mesh_value(ndensgrid, pos_ran, box)
  
     # Save grid
     ndens_outfile = f"ndens_denssample_mock_{comp_field}_{phase}_{cfg.n_reals}.dat"
@@ -278,8 +213,8 @@ def main():
 
     #- Compute number density in spherical shells 
     #- and we do not use weights since randoms are uniform over sky
-    nzgrid = n_avg * compute_nz(z_ran, zbins, cosmo, frac_sky_avg, normalize=True)  
-    nz_ran = nzgrid[safe_digitize(z_ran, zbins, cfg.bgs_clus.nzbin)]
+    nzgrid = n_avg * utils.compute_nz(z_ran, zbins, cosmo, frac_sky_avg, normalize=True)  
+    nz_ran = nzgrid[utils.safe_digitize(z_ran, zbins, cfg.bgs_clus.nzbin)]
 
 
 
@@ -344,8 +279,8 @@ def main():
         weight_comp[comp == 0] = 0.
         log.info(f"  {len(ra)} galaxies pass selection")
 
-        pos = radec_to_xyz(ra, dec, dist)
-        ndens_dat = get_mesh_value(ndensgrid, pos, box)
+        pos = utils.radec_to_xyz(ra, dec, dist)
+        ndens_dat = utils.get_mesh_value(ndensgrid, pos, box)
         mask = (ndens_dat > 0)
         ra, dec, zobs, weight_comp, ndens_dat, comp = (ra[mask], dec[mask], zobs[mask],
             weight_comp[mask], ndens_dat[mask], comp[mask]
@@ -355,8 +290,8 @@ def main():
 
         #- Compute number density in spherical shells 
         #- and we DO use weights since data are NOT uniform over sky
-        nzgrid = compute_nz(zobs, zbins, cosmo, frac_sky_avg, weights=weight_comp, normalize=False)  
-        nz_dat = nzgrid[safe_digitize(zobs, zbins, cfg.bgs_clus.nzbin)]
+        nzgrid = utils.compute_nz(zobs, zbins, cosmo, frac_sky_avg, weights=weight_comp, normalize=False)  
+        nz_dat = nzgrid[utils.safe_digitize(zobs, zbins, cfg.bgs_clus.nzbin)]
 
 
         hdu = make_fits_table(

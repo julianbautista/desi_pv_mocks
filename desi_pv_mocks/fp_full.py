@@ -22,16 +22,16 @@ import numpy as np
 import scipy as sp
 import pandas as pd
 from astropy.io import fits
-from astropy.cosmology import Planck15, FlatLambdaCDM
- 
-from k_correction import GAMA_KCorrection
+from astropy.cosmology import Planck15, FlatLambdaCDM 
 from scipy.spatial import KDTree
  
+from .k_correction import GAMA_KCorrection
+
 
 # ---------------------------------------------------------------------------
 # Configuration 
 # ---------------------------------------------------------------------------
-from config import load_config
+from .config import load_config
 cfg = None
 
 # ---------------------------------------------------------------------------
@@ -431,7 +431,8 @@ def filter_mock(fpmock: pd.DataFrame) -> pd.DataFrame:
     fpmock = fpmock[(fpmock["app_mag"] > cfg.fp_full.mag_low) & (fpmock["app_mag"] < cfg.fp_full.mag_high)]
     steps.append(("magnitude", len(fpmock)))
  
-    mask = np.random.rand(len(fpmock)) < fpmock[cfg.comp_field].values
+    mask = fpmock[cfg.comp_field] > cfg.fp_full.comp_min 
+    mask &= np.random.rand(len(fpmock)) < fpmock[cfg.comp_field].values
     fpmock = fpmock[mask]
     steps.append(("completeness", len(fpmock)))
  
