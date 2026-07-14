@@ -103,3 +103,27 @@ def pv_from_logdist(logdist, z, cosmo):
         - 1.0
     )
     return LIGHT_SPEED * np.log(10.0) * logdist / denom
+
+def weighted_avg_and_std(values, weights, axis=None):
+    """Return (weighted mean, propagated error on mean, weighted std)."""
+    avg = np.average(values, weights=weights, axis=axis)
+    avg_err = np.std(values) * np.sqrt(np.sum((weights / np.sum(weights)) ** 2))
+    variance = np.average((values - avg) ** 2, weights=weights, axis=axis)
+    return avg, avg_err, np.sqrt(variance)
+
+
+def reweight(x: np.ndarray, err: np.ndarray) -> np.ndarray:
+    """Gaussianise errors via a linear tilt that leaves the mean error unchanged."""
+    weight = 1.0 / err ** 2
+    mean_x = x.mean()
+    lam = (
+        (np.sum(x * weight) - mean_x * weight.sum())
+        / (np.sum(x ** 2) - len(x) * mean_x ** 2)
+    )
+    new_weight = weight - lam * (x - mean_x)
+    #- JB : rarely the new weight can be sligthly negative
+    w = new_weight <= 0 
+    new_weight[w] = 1e-3
+    new_err = np.sqrt(1.0 / new_weight) 
+    new_err = new_err - new_err.mean() + err.mean()
+    return new_err 

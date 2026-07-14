@@ -27,7 +27,8 @@ from sklearn.neighbors import KDTree
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-from config import load_config
+from . import utils
+from .config import load_config
 cfg=None
 
 # ---------------------------------------------------------------------------

@@ -18,15 +18,15 @@ from astropy.table import Table
 from astropy.cosmology import FlatLambdaCDM
 from scipy.interpolate import CubicSpline
 from scipy.signal import savgol_filter
-from sklearn.neighbors import KDTree
+#from sklearn.neighbors import KDTree
 
-import desi_pv_mocks.utils as utils
+import utils
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-from desi_pv_mocks.config import load_config
+from config import load_config
 cfg = None
 
 # ---------------------------------------------------------------------------
@@ -39,37 +39,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-
-
 cosmo = FlatLambdaCDM(H0=100, Om0=0.3151)
-
-# ---------------------------------------------------------------------------
-# Utility functions
-# ---------------------------------------------------------------------------
-
-def weighted_avg_and_std(values, weights, axis=None):
-    """Return (weighted mean, propagated error on mean, weighted std)."""
-    avg = np.average(values, weights=weights, axis=axis)
-    avg_err = np.std(values) * np.sqrt(np.sum((weights / np.sum(weights)) ** 2))
-    variance = np.average((values - avg) ** 2, weights=weights, axis=axis)
-    return avg, avg_err, np.sqrt(variance)
-
-
-def reweight(x: np.ndarray, err: np.ndarray) -> np.ndarray:
-    """Gaussianise errors via a linear tilt that leaves the mean error unchanged."""
-    weight = 1.0 / err ** 2
-    mean_x = x.mean()
-    lam = (
-        (np.sum(x * weight) - mean_x * weight.sum())
-        / (np.sum(x ** 2) - len(x) * mean_x ** 2)
-    )
-    new_weight = weight - lam * (x - mean_x)
-    #- JB : rarely the new weight can be sligthly negative
-    w = new_weight <= 0 
-    new_weight[w] = 1e-3
-    new_err = np.sqrt(1.0 / new_weight) 
-    new_err = new_err - new_err.mean() + err.mean()
-    return new_err 
 
 # ---------------------------------------------------------------------------
 # Step 1 — Load observed data & mocks, accumulate statistics
@@ -83,7 +53,7 @@ def load_observed_data():
     fp_data  = Table.read(cfg.data_fp_clus_data).to_pandas()
     #fp_rand  = Table.read(cfg.data_fp_clus_rand).to_pandas()
 
-    fp_data["LOGDIST_GAUSS_ERR"] = reweight(fp_data["LOGDIST"], fp_data["LOGDIST_ERR"])
+    fp_data["LOGDIST_GAUSS_ERR"] = utils.reweight(fp_data["LOGDIST"], fp_data["LOGDIST_ERR"])
 
     #log.info("  BGS data: %d galaxies | BGS rand: %d", len(bgs_data), len(bgs_rand))
     #log.info("  FP  data: %d galaxies | FP  rand: %d", len(fp_data), len(fp_rand))
@@ -107,11 +77,11 @@ def read_mocks():
                             &(mock["ZOBS"] <= cfg.fp_clus.zmax)]
                 
                 #-- Gaussianise errors
-                mock["LOGDIST_GAUSS_ERR"] = reweight(mock["LOGDIST_CORR"], 
+                mock["LOGDIST_GAUSS_ERR"] = utils.reweight(mock["LOGDIST_CORR"], 
                                                      mock["LOGDIST_CORR_ERR"])
 
                 #-- Zero-point calibration
-                offset, _, _ = weighted_avg_and_std(
+                offset, _, _ = utils.weighted_avg_and_std(
                     mock["LOGDIST_CORR"] - mock["LOGDIST_TRUE"],
                     1.0 / mock["LOGDIST_GAUSS_ERR"] ** 2,
                     )
@@ -211,7 +181,8 @@ def compute_subsampling_fraction(nz_data: np.ndarray, nz_mock: np.ndarray) -> np
     """
     subsampling_fraction = np.where(nz_mock > 0, nz_data / nz_mock, 1.0)
     subsampling_fraction = np.where(subsampling_fraction > 1.0, 1.0, subsampling_fraction)
-    subsampling_fraction /= subsampling_fraction.max()
+    #subsampling_fraction /= subsampling_fraction.max()
+    
     # Smooth in bins where the mock is already sparse (subsampling_fraction == 1)
     subsampling_fraction = np.where(subsampling_fraction == 1.0, 
                                     1.0, 
@@ -248,7 +219,7 @@ def compute_logdist_bias_correction(mocks) -> CubicSpline:
     
         bias_corr = mocks['LOGDIST_CORR'][idx] - mocks['LOGDIST_TRUE'][idx]
         weight_corr = 1.0 / mocks['LOGDIST_GAUSS_ERR'][idx] ** 2
-        residual[k] = weighted_avg_and_std(bias_corr, weight_corr)[0]
+        residual[k] = utils.weighted_avg_and_std(bias_corr, weight_corr)[0]
 
     for i in range(len(residual)):
         log.info(f"Logdist bias correction at bin {i} zcen {zcen[i]:.2f}: {residual[i]:.5f}")
@@ -310,7 +281,7 @@ def build_random_catalogue(subsampling_fraction: np.ndarray,
                 n_rand = np.sum(cut)
                 n_data = (nz_fp_mock).sum()
                 #print(' n_rand / n_data = ', n_rand/n_data)
-                cut &= (np.random.uniform(size=ra.size) <= n_data/n_rand)
+                #cut &= (np.random.uniform(size=ra.size) <= n_data/n_rand)
 
                 ra_all.append(ra[cut])
                 dec_all.append(dec[cut])
@@ -332,8 +303,10 @@ def build_random_catalogue(subsampling_fraction: np.ndarray,
     # Sub-sample to match the (already subsampled) mock n(z)
     zbins = np.linspace(cfg.fp_clus.zmin, cfg.fp_clus.zmax, cfg.fp_clus.nzbin+1)
     nz_base_rand, _ = np.histogram(z_cat, bins=zbins)
-    subfrac_ran  = np.where(nz_base_rand > 0, nz_fp_mock * subsampling_fraction / nz_base_rand, 0.0)
-    subfrac_ran /= subfrac_ran.max()
+    subfrac_ran  = np.where(nz_base_rand > 0, 
+                            nz_fp_mock * subsampling_fraction * cfg.n_reals / nz_base_rand, 
+                            0.0)
+    #subfrac_ran /= subfrac_ran.max()
 
     izs = utils.safe_digitize(z_cat, zbins)
     cut = subfrac_ran[izs] > np.random.uniform(size=len(z_cat))
