@@ -127,3 +127,16 @@ def reweight(x: np.ndarray, err: np.ndarray) -> np.ndarray:
     new_err = np.sqrt(1.0 / new_weight) 
     new_err = new_err - new_err.mean() + err.mean()
     return new_err 
+
+def clean_header(header):
+    # Remove all standard table-structure keywords
+    for key in list(header):
+        if (
+            key.startswith(("TTYPE", "TFORM", "TUNIT", "TDISP",
+                            "TNULL", "TZERO", "TSCAL", "TDIM"))
+            or key in (
+                "XTENSION", "BITPIX", "NAXIS", "NAXIS1", "NAXIS2",
+                "PCOUNT", "GCOUNT", "TFIELDS", "EXTNAME"
+            )
+        ):
+            del header[key]

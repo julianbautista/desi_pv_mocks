@@ -1,20 +1,16 @@
 """
 DESI TF Mocks Processing Pipeline
 ===================================
-Reads in TF mocks, summarises them, downsamples each mock to match the data
-n(z), and converts to clustering mocks. Also produces a random catalogue by
-downsampling Chris Blake's BGS randoms.
-
-Architecture mirrors the FP pipeline (make_DESI_FP_clustering_mocks.py).
-Shared utilities (weighted_avg_and_std, reweight, radec_to_xyz,
-pv_from_logdist, build_density_grid, lookup_grid) are identical.
+Reads in TF mocks created with make_DESI_tf_mocks.py, summarises them,
+downsamples each mock to match the data n(z), and converts to clustering mocks.
+Also produces a random catalogue by downsampling Chris Blake's BGS randoms.
 """
 
-import os
+import argparse
 import subprocess
+import os
 import h5py
 import logging
-import argparse
 import numpy as np
 import pandas as pd
 from astropy.io import fits
@@ -24,12 +20,14 @@ from scipy.interpolate import CubicSpline
 from scipy.signal import savgol_filter
 from sklearn.neighbors import KDTree
 
+import utils
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-from . import utils
-from .config import load_config
-cfg=None
+
+from config import load_config
+cfg = None
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -41,608 +39,363 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-LIGHT_SPEED = 299_792.458  # km/s
 cosmo = FlatLambdaCDM(H0=100, Om0=0.3151)
 
 # ---------------------------------------------------------------------------
-# Utility functions  (identical signatures to the FP pipeline)
+# Step 1 — Load observed data & mocks, accumulate statistics
 # ---------------------------------------------------------------------------
 
-def weighted_avg_and_std(values, weights, axis=None):
-    """Return (weighted mean, propagated error on mean, weighted std)."""
-    avg = np.average(values, weights=weights, axis=axis)
-    avg_err = np.std(values) * np.sqrt(np.sum((weights / np.sum(weights)) ** 2))
-    variance = np.average((values - avg) ** 2, weights=weights, axis=axis)
-    return avg, avg_err, np.sqrt(variance)
-
-def reweight(x: np.ndarray, err: np.ndarray) -> np.ndarray:
-    """Gaussianise errors via a linear tilt that leaves the mean error unchanged."""
-    weight = 1.0 / err ** 2
-    mean_x = x.mean()
-    lam = (
-        (np.sum(x * weight) - mean_x * weight.sum())
-        / (np.sum(x ** 2) - len(x) * mean_x ** 2)
-    )
-    new_weight = weight - lam * (x - mean_x)
-    #- JB : rarely the new weight can be sligthly negative
-    w = new_weight <= 0 
-    new_weight[w] = 1e-3
-    new_err = np.sqrt(1.0 / new_weight) 
-    new_err = new_err - new_err.mean() + err.mean()
-    return new_err 
-
-def radec_to_xyz(ra_deg: np.ndarray, dec_deg: np.ndarray, dist: np.ndarray) -> np.ndarray:
-    """Convert (RA, Dec, comoving distance) → Cartesian (x, y, z). Returns (3, N)."""
-    ra  = np.radians(ra_deg)
-    dec = np.radians(dec_deg)
-    return np.stack([
-        dist * np.cos(dec) * np.cos(ra),
-        dist * np.cos(dec) * np.sin(ra),
-        dist * np.sin(dec),
-    ])
-
-def pv_from_logdist(logdist: np.ndarray, z: np.ndarray) -> np.ndarray:
-    """
-    Carreres et al. (2023) v1 estimator:  pv = c ln(10) η / (c(1+z)/χH(z) − 1)
-    """
-    denom = (
-        LIGHT_SPEED * (1.0 + z)
-        / (cosmo.comoving_distance(z).value * cosmo.H(z).value)
-        - 1.0
-    )
-    return LIGHT_SPEED * np.log(10.0) * logdist / denom
-
-
-def build_density_grid(
-    ra_deg: np.ndarray,
-    dec_deg: np.ndarray,
-    z: np.ndarray,
-    weights: np.ndarray,
-    norm: float,
-    grid_edges: tuple,
-    ngrid: int,
-    box_vol: float,
-) -> np.ndarray:
-    """Histogram galaxies/randoms into a 3-D number-density grid."""
-    dist = cosmo.comoving_distance(z).value
-    xyz  = radec_to_xyz(ra_deg, dec_deg, dist)
-    lx, ly, lz, x0, y0, z0 = grid_edges
-    pos  = np.vstack([xyz[0] + x0, xyz[1] + y0, xyz[2] + z0]).T
-    grid, _ = np.histogramdd(
-        pos,
-        bins=(ngrid, ngrid, ngrid),
-        range=((0, lx), (0, ly), (0, lz)),
-        weights=weights,
-    )
-    return (norm / box_vol) * (grid / grid.sum())
-
-
-def lookup_grid(
-    xyz: np.ndarray,
-    grid: np.ndarray,
-    xlims: np.ndarray,
-    ylims: np.ndarray,
-    zlims: np.ndarray,
-) -> np.ndarray:
-    """Sample a pre-computed 3-D density grid at arbitrary positions."""
-    ix = np.clip(np.digitize(xyz[0], xlims) - 1, 0, grid.shape[0] - 1)
-    iy = np.clip(np.digitize(xyz[1], ylims) - 1, 0, grid.shape[1] - 1)
-    iz = np.clip(np.digitize(xyz[2], zlims) - 1, 0, grid.shape[2] - 1)
-    return grid[ix, iy, iz]
-
-
-# ---------------------------------------------------------------------------
-# TF-specific helpers
-# ---------------------------------------------------------------------------
-
-def inflate_errors(mock: pd.DataFrame, sigma: float) -> pd.DataFrame:
-    """
-    Inflate logdist errors to better match the data, and propagate the
-    additional scatter into the measured values to conserve the pull distribution.
-
-    σ_new = 0.75 * sqrt(σ_old² + (σ_TFR/5)²)
-    η_new = η_true + 0.75 * (η_obs − η_true)
-    """
-    mock = mock.copy()
-    mock["LOGDIST_ERR"] = 0.75 * np.sqrt(
-        mock["LOGDIST_ERR"] ** 2 + (sigma / 5.0) ** 2
-    )
-    mock["LOGDIST"] = (
-        mock["LOGDIST_TRUE"] + 0.75 * (mock["LOGDIST"] - mock["LOGDIST_TRUE"])
-    )
-    return mock
-
-
-def read_tf_mock(path: str) -> tuple[pd.DataFrame, float]:
-    """Read a TF full mock FITS file. Returns (DataFrame, sigma from header)."""
-    with fits.open(path) as hdul:
-        sigma = hdul[1].header["SIGMA"]
-        df = pd.DataFrame(hdul[1].data)
-    return df, sigma
-
-
-# ---------------------------------------------------------------------------
-# Step 1 — Load observed data
-# ---------------------------------------------------------------------------
-
-def load_observed_data() -> pd.DataFrame:
+def load_observed_data():
     """Load BGS and TF clustering data + randoms."""
     log.info("Loading observed data …")
-    #bgs_data = Table.read(cfg.bgs_clus_data).to_pandas()
-    #bgs_rand = Table.read(cfg.bgs_clus_rand).to_pandas()
+    #bgs_data = Table.read(cfg.data_bgs_clus_data).to_pandas()
+    #bgs_rand = Table.read(cfg.data_bgs_clus_rand).to_pandas()
     tf_data  = Table.read(cfg.data_tf_clus_data).to_pandas()
-    tf_rand  = Table.read(cfg.data_tf_clus_rand).to_pandas()
+    #tf_rand  = Table.read(cfg.data_tf_clus_rand).to_pandas()
 
-    tf_data["LOGDIST"]          = (
-        np.log10(cosmo.luminosity_distance(tf_data["Z"].to_numpy()).value)
+    tf_data["LOGDIST"]           = (
+        np.log10(cosmo.luminosity_distance(tf_data["Z"]).value)
         + 5.0
         - tf_data["MU"] / 5.0
     )
     tf_data["LOGDIST_ERR"]       = tf_data["MU_ERR"] / 5.0
     tf_data["LOGDIST_GAUSS_ERR"] = tf_data["LOGDIST_ERR"].copy()
 
+    #tf_data["LOGDIST_GAUSS_ERR"] = utils.reweight(tf_data["LOGDIST"], tf_data["LOGDIST_ERR"])
+
+
+
     #log.info("  BGS data: %d galaxies | BGS rand: %d", len(bgs_data), len(bgs_rand))
-    log.info("  TF  data: %d galaxies | TF  rand: %d", len(tf_data),  len(tf_rand))
+    #log.info("  TF  data: %d galaxies | TF  rand: %d", len(tf_data), len(tf_rand))
     #return bgs_data, bgs_rand, tf_data, tf_rand
-    return tf_data, tf_rand
+    return tf_data
 
+def inflate_errors(mock: pd.DataFrame, sigma: float) -> pd.DataFrame:
+    """
+    Inflate logdist errors to better match the data, and propagate the
+    additional scatter into the measured values to conserve the pull distribution.
 
-# ---------------------------------------------------------------------------
-# Step 2 — Accumulate mock statistics
-# ---------------------------------------------------------------------------
+    sigma_new = 0.75 * sqrt(sigma_old² + (sigma_TFR/5)²)
+    η_new = η_true + 0.75 * (η_obs - η_true)
+    """
+    mock["LOGDIST_ERR"] = 0.5 * np.sqrt(
+        mock["LOGDIST_ERR"] ** 2 + (sigma / 5.0) ** 2
+    )
+    mock["LOGDIST"] = (
+        mock["LOGDIST_TRUE"] + 0.5 * (mock["LOGDIST"] - mock["LOGDIST_TRUE"])
+    )
+    return mock
 
-def accumulate_mock_statistics(phase):
+def read_mocks():
+    mocks = []
+    headers = []
+
+    #for phase in range(cfg.n_phases):
+    for phase in [cfg.tf_clus.phase]:
+        log.info("  Phase %d …", phase)
+        for real in range(cfg.n_reals):
+            tf_file = cfg.mock_tf_full_data.format(phase=phase, real=real)
+            with fits.open(tf_file) as hdu:
+                header = hdu[1].header.copy()
+                utils.clean_header(header)
+                sigma = hdu[1].header["SIGMA"]
+                headers.append(header)
+            #tab = Table.read(tf_file)
+            #print(tab.meta) 
+
+            mock = Table.read(tf_file).to_pandas()
+            mock['sigma'] = sigma 
+
+            #-- Inflate errors
+            if cfg.tf_clus.inflate_errors: 
+                inflate_errors(mock, sigma)
+
+            #-- Redshift cut
+            mock['real'] = real
+            mock = mock[ (mock["ZOBS"] >= cfg.tf_clus.zmin) 
+                        &(mock["ZOBS"] <= cfg.tf_clus.zmax)]
+            
+            #-- Completeness cut and sub-sampling
+            mock = mock[ (mock[cfg.comp_field] >= cfg.tf_clus.comp_min)] 
+            mock = mock[ (np.random.uniform(size=len(mock)) < mock[cfg.comp_field])]
+
+            mock["LOGDIST_CORR"] = mock["LOGDIST"].copy()
+            mock["LOGDIST_CORR_ERR"] = mock["LOGDIST_ERR"].copy() 
+
+            #-- Gaussianise errors
+            mock["LOGDIST_GAUSS_ERR"] = utils.reweight(mock["LOGDIST_CORR"], 
+                                                 mock["LOGDIST_CORR_ERR"])
+            #mock["LOGDIST_GAUSS_ERR"] = mock["LOGDIST_ERR"].copy()
+
+            #-- Zero-point calibration
+            offset, _, _ = utils.weighted_avg_and_std(
+                mock["LOGDIST_CORR"] - mock["LOGDIST_TRUE"],
+                1.0 / mock["LOGDIST_GAUSS_ERR"] ** 2,
+                )
+            mock["LOGDIST_CORR"] -= offset
+            
+            mocks.append(mock)
+
+    mocks = pd.concat(mocks, ignore_index=True)
+    mocks['DIST'] = cosmo.comoving_distance(mocks["ZOBS"]).value
+    
+    # PV estimation
+    mocks["PV"]      = utils.pv_from_logdist(mocks["LOGDIST_CORR"], mocks['ZOBS'], cosmo)
+    mocks["PV_ERR"]  = utils.pv_from_logdist(mocks["LOGDIST_GAUSS_ERR"], mocks['ZOBS'], cosmo)
+    mocks["PV_TRUE"] = utils.pv_from_logdist(mocks["LOGDIST_TRUE"], mocks['ZOBS'], cosmo)
+
+    log.info("  Total mocks: %d galaxies | %d realisations", len(mocks), mocks['real'].nunique())
+
+    return mocks, headers
+
+def accumulate_mock_statistics(mocks) -> dict:
     """
     Loop over all phases/realisations and accumulate n(z) and logdist statistics.
     Returns a dict of arrays for downstream use.
     """
     log.info("Accumulating mock statistics …")
-    zrange = [cfg.tf_clus.zmin, cfg.tf_clus.zmax]
+    zlims = [cfg.tf_clus.zmin, cfg.tf_clus.zmax]
 
-    nzmock        = np.zeros(cfg.tf_clus.nzbin)
-    nzmockerr2    = np.zeros(cfg.tf_clus.nzbin)
-    nztfmock      = np.zeros(cfg.tf_clus.nzbin)
-    nztfmockerr2  = np.zeros(cfg.tf_clus.nzbin)
-    logdistmock   = np.zeros(cfg.tf_clus.nzbin)
-    logdisterr    = np.zeros(cfg.tf_clus.nzbin)
-    logdisterr_g  = np.zeros(cfg.tf_clus.nzbin)
-    pullmock      = np.zeros(cfg.tf_clus.nzbin)
+    # Accumulators
+    #nz_bgs_mock      = np.zeros(cfg.tf_clus.nzbin)
+    #nz_bgs_mock_err2  = np.zeros(cfg.tf_clus.nzbin)
+    nz_tf_mock    = np.zeros(cfg.tf_clus.nzbin)
+    nz_tf_mock_err2 = np.zeros(cfg.tf_clus.nzbin)
+    logdistmock  = np.zeros(cfg.tf_clus.nzbin)
+    logdisterr   = np.zeros(cfg.tf_clus.nzbin)
+    logdisterr_g = np.zeros(cfg.tf_clus.nzbin)
+    pullmock     = np.zeros(cfg.tf_clus.nzbin)
 
-    mock_count = tfmock_count = 0
-    ngals      = 0
-    mean_pull  = std_pull = 0.0
+    tfmock_count = mocks['real'].nunique()
+    ngals = len(mocks)
 
-    all_z, all_ld_true, all_ld_obs  = [], [], []
-    all_ld_err, all_ld_gerr          = [], []
+    # Histograms
+    nz = np.histogram(mocks["ZOBS"], bins=cfg.tf_clus.nzbin, range=zlims)[0]
+    nz_tf_mock     = nz
+    nz_tf_mock_err2 = nz ** 2
+    logdistmock  = np.histogram(mocks["LOGDIST_CORR"], 
+                                    bins=cfg.tf_clus.nzbin, 
+                                    range=[-0.3, 0.3])[0]
+    logdisterr   = np.histogram(mocks["LOGDIST_CORR_ERR"], 
+                                    bins=cfg.tf_clus.nzbin, 
+                                    range=[0.08, 0.30])[0]
+    logdisterr_g = np.histogram(mocks["LOGDIST_GAUSS_ERR"], 
+                                    bins=cfg.tf_clus.nzbin, 
+                                    range=[0.08, 0.30])[0]
 
-    #for phase in range(cfg.tf_clus.phase):
-    log.debug("  Phase %d …", phase)
-    for real in range(cfg.n_reals):
+    pulls = (
+        (mocks["LOGDIST_CORR"] - mocks["LOGDIST_TRUE"])
+        / mocks["LOGDIST_GAUSS_ERR"]
+    )
+    pullmock  = np.histogram(pulls, bins=cfg.tf_clus.nzbin, range=[-4.0, 4.0])[0]
+    mean_pull = pulls.sum()
+    std_pull  = (pulls ** 2).sum()
 
-        # ---- BGS clustering mock ----
-        bgs_file = cfg.mock_bgs_clus_data.format(phase=phase, real=real)
-        try:
-            mock = Table.read(bgs_file).to_pandas()
-            nz   = np.histogram(mock["Z"], bins=cfg.tf_clus.nzbin,
-                                range=zrange, weights=mock["WEIGHT"])[0]
-            nzmock      += nz
-            nzmockerr2  += nz ** 2
-            mock_count  += 1
-        except Exception as exc:
-            log.warning("Skipping BGS mock %s: %s", bgs_file, exc)
-
-        # ---- TF full mock ----
-        tf_file = cfg.mock_tf_full_data.format(phase=phase, real=real)
-        try:
-            mock, sigma = read_tf_mock(tf_file)
-            mock = mock[(mock["ZOBS"] >= cfg.tf_clus.zmin) & (mock["ZOBS"] <= cfg.tf_clus.zmax)].copy()
-
-            # Completeness downsampling
-            keep = np.random.uniform(size=len(mock)) < mock[cfg.comp_field].to_numpy()
-            mock = mock.iloc[keep].copy()
-
-            mock = inflate_errors(mock, sigma)
-            mock["LOGDIST_GAUSS_ERR"] = reweight(
-                mock["LOGDIST"].to_numpy(), mock["LOGDIST_ERR"].to_numpy()
-            )
-
-            # Zero-point the mock
-            offset = weighted_avg_and_std(
-                mock["LOGDIST"].to_numpy() - mock["LOGDIST_TRUE"].to_numpy(),
-                1.0 / mock["LOGDIST_GAUSS_ERR"].to_numpy() ** 2,
-            )[0]
-            mock["LOGDIST"] -= offset
-
-            ngals += len(mock)
-            all_z.append(mock["ZOBS"].to_numpy())
-            all_ld_true.append(mock["LOGDIST_TRUE"].to_numpy())
-            all_ld_obs.append(mock["LOGDIST"].to_numpy())
-            all_ld_err.append(mock["LOGDIST_ERR"].to_numpy())
-            all_ld_gerr.append(mock["LOGDIST_GAUSS_ERR"].to_numpy())
-
-            nz = np.histogram(mock["ZOBS"], bins=cfg.tf_clus.nzbin, range=zrange)[0]
-            nztfmock     += nz
-            nztfmockerr2 += nz ** 2
-            logdistmock  += np.histogram(mock["LOGDIST"],     bins=cfg.tf_clus.nzbin, range=[-0.3, 0.3])[0]
-            logdisterr   += np.histogram(mock["LOGDIST_ERR"], bins=cfg.tf_clus.nzbin, range=[0.09, 0.20])[0]
-            logdisterr_g += np.histogram(mock["LOGDIST_GAUSS_ERR"], bins=cfg.tf_clus.nzbin, range=[0.09, 0.20])[0]
-
-            pulls = (mock["LOGDIST"] - mock["LOGDIST_TRUE"]) / mock["LOGDIST_GAUSS_ERR"]
-            pullmock  += np.histogram(pulls, bins=cfg.tf_clus.nzbin, range=[-4.0, 4.0])[0]
-            mean_pull += pulls.sum()
-            std_pull  += (pulls ** 2).sum()
-            tfmock_count += 1
-
-        except Exception as exc:
-            log.warning("Skipping TF mock %s: %s", tf_file, exc)
-
-    nzmock      /= max(mock_count, 1)
-    nzmockerr    = np.sqrt(np.maximum(nzmockerr2   / max(mock_count, 1)   - nzmock ** 2,   0))
-    nztfmock    /= max(tfmock_count, 1)
-    nztfmockerr  = np.sqrt(np.maximum(nztfmockerr2 / max(tfmock_count, 1) - nztfmock ** 2, 0))
-    logdistmock /= max(tfmock_count, 1)
-    logdisterr  /= max(tfmock_count, 1)
-    logdisterr_g /= max(tfmock_count, 1)
-    pullmock    /= max(tfmock_count, 1)
-    if ngals > 0:
-        mean_pull /= ngals
-        std_pull   = np.sqrt(std_pull / ngals - mean_pull ** 2)
+    # Normalise
+    nz_tf_mock = nz_tf_mock/tfmock_count
+    nz_tf_mock_err = np.sqrt(nz_tf_mock_err2 / tfmock_count - nz_tf_mock ** 2)
+    logdistmock = logdistmock/tfmock_count
+    logdisterr  = logdisterr/tfmock_count
+    logdisterr_g = logdisterr_g/tfmock_count
+    pullmock    = pullmock/tfmock_count
+    mean_pull   = mean_pull/ngals
+    std_pull     = np.sqrt(std_pull / ngals - mean_pull ** 2)
 
     log.info(
-        "Mocks processed: %d BGS / %d TF | pull: mean=%.4f, std=%.4f",
-        mock_count, tfmock_count, mean_pull, std_pull,
+        "Mocks processed: %d tf | Nz: mean=%.4f, std=%.4f | pull: mean=%.4f, std=%.4f",
+        tfmock_count, np.mean(nz_tf_mock), np.mean(nz_tf_mock_err), mean_pull, std_pull,
     )
 
-    return dict(
-        nzmock=nzmock,     nzmockerr=nzmockerr,
-        nztfmock=nztfmock, nztfmockerr=nztfmockerr,
+    stats = dict(
+        nz_tf_mock=nz_tf_mock, nz_tf_mock_err=nz_tf_mock_err,
         logdistmock=logdistmock, logdisterr=logdisterr, logdisterr_g=logdisterr_g,
         pullmock=pullmock, mean_pull=mean_pull, std_pull=std_pull,
-        zvals          = np.concatenate(all_z),
-        logdists_true  = np.concatenate(all_ld_true),
-        logdists_obs   = np.concatenate(all_ld_obs),
-        logdists_err   = np.concatenate(all_ld_err),
-        logdists_gerr  = np.concatenate(all_ld_gerr),
     )
 
+    return stats
+
 
 # ---------------------------------------------------------------------------
-# Step 3 — Sub-sampling fraction and logdist bias correction
+# Step 2 — Compute sub-sampling fraction and logdist bias correction
 # ---------------------------------------------------------------------------
 
-def compute_subsampling_fraction(
-    nztfdat: np.ndarray,
-    nztfmock: np.ndarray,
-) -> np.ndarray:
+def compute_subsampling_fraction(nz_data: np.ndarray, nz_mock: np.ndarray) -> np.ndarray:
     """
-    Per-z-bin sub-sampling fraction so mock n(z) matches data n(z).
-    Clipped to [0, 1]; smoothed where the mock is already at capacity.
+    Compute per-z-bin sub-sampling fraction so mock n(z) matches data n(z).
+    Values are clipped to [0, 1] and normalised to max=1.
     """
-    subfrac = np.where(nztfmock > 0, nztfdat / nztfmock, 1.0)
-    subfrac = np.clip(subfrac, 0.0, 1.0)
-    smooth  = savgol_filter(subfrac, 10, 1)
-    # Only smooth bins where subsampling < 1 (i.e. mock is denser than data)
-    subfrac = np.where(subfrac == 1.0, 1.0, smooth)
-    log.info("Sub-sampling fraction: min=%.3f, max=%.3f", subfrac.min(), subfrac.max())
-    return subfrac
+    subsampling_fraction = np.where(nz_mock > 0, nz_data / nz_mock, 1.0)
+    subsampling_fraction = np.where(subsampling_fraction > 1.0, 1.0, subsampling_fraction)
+    #subsampling_fraction /= subsampling_fraction.max()
+    
+    # Smooth in bins where the mock is already sparse (subsampling_fraction == 1)
+    subsampling_fraction = np.where(subsampling_fraction == 1.0, 
+                                    1.0, 
+                                    savgol_filter(subsampling_fraction, 15, 1))
+    for i in range(len(subsampling_fraction)):
+        log.info(f"Sub-sampling fraction: bin {i} = {nz_data[i]:.1f} / {nz_mock[i]:.1f} = {subsampling_fraction[i]:.4f}") 
+    
+    return subsampling_fraction
+
+def subsample_mocks(mocks: pd.DataFrame, subsampling_fraction: np.ndarray) -> pd.DataFrame:
+    """
+    Sub-sample each mock realisation to match the data n(z).
+    Returns the modified mocks DataFrame.
+    """
+    zbins = np.linspace(cfg.tf_clus.zmin, cfg.tf_clus.zmax, cfg.tf_clus.nzbin+1)
+    izs = utils.safe_digitize(mocks["ZOBS"], zbins)
+    keep = subsampling_fraction[izs] > np.random.uniform(size=len(mocks))
+    log.info(f"  Total mocks after n(z) sub-sampling: {keep.sum()} of {keep.size}")
+    return mocks[keep]
 
 
-def compute_logdist_bias_correction(stats: dict) -> CubicSpline:
+def compute_logdist_bias_correction(mocks) -> CubicSpline:
     """
     Fit a cubic spline to the weighted-mean logdist residual vs. redshift.
     Returns a callable correction f(z).
     """
-    bins    = np.linspace(cfg.tf_clus.zmin, cfg.tf_clus.zmax, cfg.tf_clus.nzbin)
-    midvals = 0.5 * (bins[:-1] + bins[1:])
-    ld_mean = np.zeros(cfg.tf_clus.nzbin - 1)
+    zbins    = np.linspace(cfg.tf_clus.zmin, cfg.tf_clus.zmax, cfg.tf_clus.nzbin+1)
+    zcen = 0.5 * (zbins[:-1] + zbins[1:])
+    residual = np.zeros(cfg.tf_clus.nzbin)
 
-    zv  = stats["zvals"]
-    ldo = stats["logdists_obs"]
-    ldt = stats["logdists_true"]
-    lge = stats["logdists_gerr"]
+    for k in range(cfg.tf_clus.nzbin):
+        zlo, zhi = zbins[k], zbins[k + 1]
+        idx = (mocks["ZOBS"] > zlo) & (mocks["ZOBS"] <= zhi)
+    
+        bias_corr = mocks['LOGDIST_CORR'][idx] - mocks['LOGDIST_TRUE'][idx]
+        weight_corr = 1.0 / mocks['LOGDIST_GAUSS_ERR'][idx] ** 2
+        residual[k] = utils.weighted_avg_and_std(bias_corr, weight_corr)[0]
 
-    for k, (zlo, zhi) in enumerate(zip(bins[:-1], bins[1:])):
-        idx = np.where((zv > zlo) & (zv <= zhi))[0]
-        if len(idx) > 2:
-            ld_mean[k] = weighted_avg_and_std(
-                ldo[idx] - ldt[idx], 1.0 / lge[idx] ** 2
-            )[0]
+    for i in range(len(residual)):
+        log.info(f"Logdist bias correction at bin {i} zcen {zcen[i]:.2f}: {residual[i]:.5f}")
+    
+    logdist_bias_corr = CubicSpline(zcen, residual)
+    return logdist_bias_corr
 
-    return CubicSpline(midvals, ld_mean)
+def build_pv_meshes(mocks, box):
+    mock_pos = utils.radec_to_xyz(mocks["RA"], mocks["DEC"], mocks["DIST"])
+    logdist_error = mocks['LOGDIST_GAUSS_ERR']
+    logdist_error_mesh = utils.build_mesh(mock_pos, logdist_error, box['ngrid'], box['side'])
+    #pv_error_mesh = utils.pv_from_logdist(logdist_error_mesh, mocks['ZOBS'], cosmo)
+    w = logdist_error_mesh>0
+    for p in np.linspace(0.1, 0.9, 9):
+        log.info("LOGDIST_ERR mesh: %.1f percentile = %.4e", p*100, np.percentile(logdist_error_mesh[w], p*100))
 
+    norm = 1/mocks['real'].nunique()
+    npv_mesh = norm * utils.build_density_mesh(mock_pos, box=box, normalize=False)
+    w = npv_mesh > 0 
+    for p in np.linspace(0.1, 0.9, 9):
+        log.info("NPV mesh: %.1f percentile = %.4e", p*100, np.percentile(npv_mesh[w], p*100))
+
+    return npv_mesh, logdist_error_mesh
 
 # ---------------------------------------------------------------------------
-# Step 4 — Build random catalogue
+# Step 3 — Build random catalogue
 # ---------------------------------------------------------------------------
 
-def build_random_catalogue(phase,
-    subfrac: np.ndarray,
-    nztfmock: np.ndarray,
-) -> pd.DataFrame:
+def build_random_catalogue(subsampling_fraction: np.ndarray, 
+                           nz_tf_mock: np.ndarray) -> pd.DataFrame:
     """
     Read Abacus base randoms, apply completeness cut and sub-sampling,
     then return a DataFrame with columns RA, DEC, Z, WEIGHT.
     """
     log.info("Reading Abacus random catalogues …")
-    ra_all, dec_all, z_all = [], [], []
+    ra_all, dec_all, z_all, comp_all = [], [], [], []
 
-    #for ireal in range(cfg.n_phases_rand):
-    for real in range(cfg.n_reals):
-        path = cfg.mock_bgs_base_rand.format(phase=phase, real=real)
-        try:
+    #for phase in range(cfg.n_real_rand):
+    for phase in [cfg.tf_clus.phase]: 
+        for ireal in range(cfg.n_reals):
+            log.info(f"  Randoms phase {phase:03d} real {ireal:03d}")
+            path = cfg.mock_bgs_base_rand.format(phase=phase, real=ireal)
+            #rand = pd.read_hdf(path, columns=['ra', 'dec', 'zobs', cfg.comp_field])
             with h5py.File(path, "r") as f:
                 ra   = f["ra"][...]
                 dec  = f["dec"][...]
                 z    = f["zobs"][...]
                 comp = f[cfg.comp_field][...]
-            nran = len(ra)
+            
+            #- Selection cuts
             cut  = (
                 (z >= cfg.tf_clus.zmin)
                 & (z <= cfg.tf_clus.zmax)
-                & (np.random.uniform(size=nran) < comp)
+                & (comp > cfg.tf_clus.comp_min)
+                #-- now we are no longer sub-sampling randoms -> apply weight! 
+                #& (np.random.uniform(size=nran) < comp)
             )
+            
             ra_all.append(ra[cut])
             dec_all.append(dec[cut])
             z_all.append(z[cut])
-        except Exception as exc:
-            log.warning("Skipping random %s: %s", path, exc)
+            comp_all.append(comp[cut])
 
     ra_cat  = np.concatenate(ra_all)
     dec_cat = np.concatenate(dec_all)
     z_cat   = np.concatenate(z_all)
-    w_cat   = np.ones(len(ra_cat))
+    w_cat   = np.concatenate(comp_all)
 
     # Shuffle
-    idx = np.random.permutation(len(ra_cat))
-    ra_cat, dec_cat, z_cat, w_cat = ra_cat[idx], dec_cat[idx], z_cat[idx], w_cat[idx]
+    #idx = np.random.permutation(len(ra_cat))
+    #ra_cat, dec_cat, z_cat, w_cat = ra_cat[idx], dec_cat[idx], z_cat[idx], w_cat[idx]
     log.info("  Total randoms before sub-sampling: %d", len(z_cat))
 
     # Sub-sample to match the (already subsampled) mock n(z)
-    nzold     = np.histogram(z_cat, bins=cfg.tf_clus.nzbin, range=[cfg.tf_clus.zmin, cfg.tf_clus.zmax],
-                             weights=w_cat)[0]
-    sfrac_ran = np.where(nzold > 0, nztfmock * subfrac / nzold, 0.0)
-    sfrac_ran = sfrac_ran / sfrac_ran.max()
+    zbins = np.linspace(cfg.tf_clus.zmin, cfg.tf_clus.zmax, cfg.tf_clus.nzbin+1)
+    nz_base_rand, _ = np.histogram(z_cat, bins=zbins)
+    subfrac_ran  = np.where(nz_base_rand > 0, 
+                            nz_tf_mock * subsampling_fraction * cfg.n_reals / nz_base_rand, 
+                            0.0)
+    #subfrac_ran /= subfrac_ran.max()
 
-    izs = np.clip(
-        np.digitize(z_cat, np.linspace(cfg.tf_clus.zmin, cfg.tf_clus.zmax, cfg.tf_clus.nzbin + 1)) - 1,
-        0, cfg.tf_clus.nzbin - 1,
-    )
-    cut = sfrac_ran[izs] > np.random.uniform(size=len(z_cat))
+    izs = utils.safe_digitize(z_cat, zbins)
+    cut = subfrac_ran[izs] > np.random.uniform(size=len(z_cat))
     ra_cat, dec_cat, z_cat, w_cat = ra_cat[cut], dec_cat[cut], z_cat[cut], w_cat[cut]
     log.info("  Total randoms after  sub-sampling: %d", len(z_cat))
 
     return pd.DataFrame({"RA": ra_cat, "DEC": dec_cat, "Z": z_cat, "WEIGHT": w_cat})
 
 
-# ---------------------------------------------------------------------------
-# Step 5 — Build 3-D density grids
-# ---------------------------------------------------------------------------
-
-def build_grid_geometry() -> dict:
-    """Return the grid geometry (box dimensions, bin edges, voxel volume)."""
-    distmax = cosmo.comoving_distance(cfg.tf_clus.zmax).value
-    lx = ly = lz = 2.0 * distmax
-    dvol  = (lx / cfg.tf_clus.ngrid) ** 3
-    x0 = y0 = z0 = distmax
-    xlims = np.linspace(0.0, lx, cfg.tf_clus.ngrid + 1) - x0
-    ylims = np.linspace(0.0, ly, cfg.tf_clus.ngrid + 1) - y0
-    zlims = np.linspace(0.0, lz, cfg.tf_clus.ngrid + 1) - z0
-    return dict(lx=lx, ly=ly, lz=lz, x0=x0, y0=y0, z0=z0,
-                dvol=dvol, xlims=xlims, ylims=ylims, zlims=zlims)
-
-
-def build_density_grids(
-    bgs_rand: pd.DataFrame,
-    tf_rand: pd.DataFrame,
-    nzmock: np.ndarray,
-    nztfmock: np.ndarray,
-    subfrac: np.ndarray,
-    geom: dict,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Build BGS density grid (NDENS) and TF PV density grid (NPV)."""
-    log.info("Building 3-D density grids …")
-    edges = (geom["lx"], geom["ly"], geom["lz"],
-             geom["x0"], geom["y0"], geom["z0"])
-
-    ndensweigrid = build_density_grid(
-        bgs_rand["RA"].to_numpy(), bgs_rand["DEC"].to_numpy(),
-        bgs_rand["Z"].to_numpy(),  bgs_rand["WEIGHT"].to_numpy(),
-        norm=nzmock.sum() / geom["dvol"],
-        grid_edges=edges, ngrid=cfg.tf_clus.ngrid, box_vol=geom["dvol"],
-    )
-    npvweigrid = build_density_grid(
-        tf_rand["RA"].to_numpy(),  tf_rand["DEC"].to_numpy(),
-        tf_rand["Z"].to_numpy(),   tf_rand["WEIGHT"].to_numpy(),
-        norm=(nztfmock * subfrac).sum() / geom["dvol"],
-        grid_edges=edges, ngrid=cfg.tf_clus.ngrid, box_vol=geom["dvol"],
-    )
-    log.info("  n(z) total: BGS mock=%.0f | TF mock=%.0f | TF subsampled=%.0f",
-             nzmock.sum(), nztfmock.sum(), (nztfmock * subfrac).sum())
-    return ndensweigrid, npvweigrid
-
-
-# ---------------------------------------------------------------------------
-# Step 6 — Process each mock into a clustering mock
-# ---------------------------------------------------------------------------
-
-def process_mock(
-    mock: pd.DataFrame,
-    sigma: float,
-    subfrac: np.ndarray,
-    logdist_fix: CubicSpline,
-    ndensweigrid: np.ndarray,
-    npvweigrid: np.ndarray,
-    geom: dict,
-) -> pd.DataFrame:
-    """
-    Apply completeness cut, error inflation, sub-sampling, Gaussianisation,
-    zero-pointing, PV estimation, and density field sampling to one mock.
-    """
-    mock = mock[(mock["ZOBS"] >= cfg.tf_clus.zmin) & (mock["ZOBS"] <= cfg.tf_clus.zmax)].copy()
-
-    # Completeness
-    keep = np.random.uniform(size=len(mock)) < mock[cfg.comp_field].to_numpy()
-    mock = mock.iloc[keep].copy()
-
-    # Error inflation (TF-specific)
-    mock = inflate_errors(mock, sigma)
-
-    # Sub-sample to match data n(z)
-    izs  = np.clip(
-        np.digitize(mock["ZOBS"].to_numpy(),
-                    np.linspace(cfg.tf_clus.zmin, cfg.tf_clus.zmax, cfg.tf_clus.nzbin + 1)) - 1,
-        0, cfg.tf_clus.nzbin - 1,
-    )
-    keep = subfrac[izs] > np.random.uniform(size=len(mock))
-    mock = mock.iloc[keep].copy()
-
-    # Gaussianise errors
-    mock["LOGDIST_GAUSS_ERR"] = reweight(
-        mock["LOGDIST"].to_numpy(), mock["LOGDIST_ERR"].to_numpy()
-    )
-
-    # Zero-point + redshift-dependent bias correction
-    offset = weighted_avg_and_std(
-        mock["LOGDIST"].to_numpy() - mock["LOGDIST_TRUE"].to_numpy(),
-        1.0 / mock["LOGDIST_GAUSS_ERR"].to_numpy() ** 2,
-    )[0]
-    mock["LOGDIST"] -= offset + logdist_fix(mock["ZOBS"].to_numpy())
-
-    # PV estimation
-    mock["PV"]      = pv_from_logdist(mock["LOGDIST"].to_numpy(),      mock["ZOBS"].to_numpy())
-    mock["PV_ERR"]  = pv_from_logdist(mock["LOGDIST_GAUSS_ERR"].to_numpy(), mock["ZOBS"].to_numpy())
-    mock["PV_TRUE"] = LIGHT_SPEED * (
-        (1.0 + mock["ZOBS"].to_numpy()) / (1.0 + mock["ZCOS"].to_numpy()) - 1.0
-    )
-
-    # 3-D Cartesian positions
-    dist = cosmo.comoving_distance(mock["ZOBS"].to_numpy()).value
-    xyz  = radec_to_xyz(mock["RA"].to_numpy(), mock["DEC"].to_numpy(), dist)
-    mock["_x"], mock["_y"], mock["_z"] = xyz[0], xyz[1], xyz[2]
-
-    xyz_shifted = xyz + np.array([[geom["x0"]], [geom["y0"]], [geom["z0"]]])
-    mock["NDENS"] = lookup_grid(xyz_shifted, ndensweigrid,
-                                geom["xlims"], geom["ylims"], geom["zlims"])
-    mock["NPV"]   = lookup_grid(xyz_shifted, npvweigrid,
-                                geom["xlims"], geom["ylims"], geom["zlims"])
-    return mock
-
-
-def write_clustering_mock(mock: pd.DataFrame, outfile: str) -> None:
-    """Write a processed mock to a FITS binary table."""
-    os.makedirs(os.path.dirname(outfile), exist_ok=True)
-    columns = [
-        ("RA",           mock["RA"].to_numpy()),
-        ("DEC",          mock["DEC"].to_numpy()),
-        ("Z",            mock["ZOBS"].to_numpy()),
-        ("WEIGHT",       np.ones(len(mock))),
-        ("NPV",          mock["NPV"].to_numpy()),
-        ("NDENS",        mock["NDENS"].to_numpy()),
-        ("LOGDIST",      mock["LOGDIST"].to_numpy()),
-        ("LOGDIST_ERR",  mock["LOGDIST_GAUSS_ERR"].to_numpy()),
-        ("LOGDIST_TRUE", mock["LOGDIST_TRUE"].to_numpy()),
-        ("PV",           mock["PV"].to_numpy()),
-        ("PV_ERR",       mock["PV_ERR"].to_numpy()),
-        ("PV_TRUE",      mock["PV_TRUE"].to_numpy()),
-    ]
-    hdu = fits.BinTableHDU.from_columns(
-        [fits.Column(name=n, format="D", array=a) for n, a in columns]
-    )
-    hdu.writeto(outfile, overwrite=True)
-
-
-def run_clustering_mock_loop(
-    phase: int,
-    subfrac: np.ndarray,
-    logdist_fix: CubicSpline,
-    ndensweigrid: np.ndarray,
-    npvweigrid: np.ndarray,
-    geom: dict,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Process all phase/realisation pairs into clustering mocks.
-    Returns (x, y, z, logdist_gauss_err) arrays accumulated across all mocks
-    for nearest-neighbour error assignment to randoms.
-    """
-    log.info("Generating clustering mocks …")
-    all_x, all_y, all_z_gal, all_lde = [], [], [], []
-
-    #for phase in range(cfg.n_phases):
-    for real in range(cfg.n_reals):
-        tf_file  = cfg.mock_tf_full_data.format(phase=phase, real=real)
-        out_file = cfg.mock_tf_clus_data.format(phase=phase, real=real)
-        try:
-            raw, sigma = read_tf_mock(tf_file)
-            mock = process_mock(
-                raw, sigma, subfrac, logdist_fix,
-                ndensweigrid, npvweigrid, geom,
-            )
-            log.info("  Writing mock ph=%03d r=%03d → %s", phase, real, out_file)
-            write_clustering_mock(mock, out_file)
-
-            all_x.append(mock["_x"].to_numpy())
-            all_y.append(mock["_y"].to_numpy())
-            all_z_gal.append(mock["_z"].to_numpy())
-            all_lde.append(mock["LOGDIST_GAUSS_ERR"].to_numpy())
-        except Exception as exc:
-            log.warning("Skipping mock phase=%d real=%d: %s", phase, real, exc)
-
-    return (
-        np.concatenate(all_x),
-        np.concatenate(all_y),
-        np.concatenate(all_z_gal),
-        np.concatenate(all_lde),
-    )
-
-
-# ---------------------------------------------------------------------------
-# Step 7 — Write random catalogue with nearest-neighbour error assignment
-# ---------------------------------------------------------------------------
-
 def write_random_catalogue(
-    phase: int,
     tf_rand: pd.DataFrame,
-    gal_x: np.ndarray,
-    gal_y: np.ndarray,
-    gal_z: np.ndarray,
-    gal_lde: np.ndarray,
-    ndensweigrid: np.ndarray,
-    npvweigrid: np.ndarray,
-    geom: dict,
-    nztfmock: np.ndarray,
-    subfrac: np.ndarray,
-    rfact: int = 20,
+    npv_mesh: np.ndarray,
+    logdist_error_mesh: np.ndarray,
+    box: dict,
 ) -> None:
     """
     Assign logdist/PV errors to randoms via nearest-neighbour matching,
-    then write FITS random catalogues at rfact x 10 and rfact x 1 sizes.
+    then write the FITS random catalogue.
     """
     log.info("Building random catalogue with NN error assignment …")
 
-    n_target = rfact * int((nztfmock * subfrac).sum())
-    if len(tf_rand) > n_target:
-        idx     = np.random.choice(len(tf_rand), n_target, replace=False)
-        tf_rand = tf_rand.iloc[idx].reset_index(drop=True)
-    log.info("  Randoms after size truncation: %d (rfact=%d)", len(tf_rand), rfact)
+    # Truncate random catalogue to rfact × expected galaxy count
+    #n_target = cfg.tf_clus.rfact * int((nz_tf_mock * subsampling_fraction).sum())
+    #if len(tf_rand) > n_target:
+    #    idx     = np.random.choice(len(tf_rand), n_target, replace=False)
+    #    tf_rand = tf_rand.iloc[idx].reset_index(drop=True)
+    #log.info("  Randoms after truncation: %d", len(tf_rand))
 
-    ran_dist = cosmo.comoving_distance(tf_rand["Z"].to_numpy()).value
-    ran_xyz  = radec_to_xyz(tf_rand["RA"].to_numpy(), tf_rand["DEC"].to_numpy(), ran_dist)
-    ran_xyz_shifted = ran_xyz + np.array([[geom["x0"]], [geom["y0"]], [geom["z0"]]])
+    ran_dist = cosmo.comoving_distance(tf_rand["Z"]).value
+    ran_xyz  = utils.radec_to_xyz(tf_rand["RA"], 
+                                  tf_rand["DEC"], 
+                                  ran_dist)
 
-    # Nearest-neighbour logdist error assignment
-    tree    = KDTree(np.c_[gal_x, gal_y, gal_z])
-    nn      = tree.query(np.c_[ran_xyz[0], ran_xyz[1], ran_xyz[2]],
-                         return_distance=False, dualtree=True)
-    ran_lde = gal_lde[nn[:, 0]]
-    ran_pve = pv_from_logdist(ran_lde, tf_rand["Z"].to_numpy())
+    # Nearest-neighbour logdist error
+    #tree = KDTree(np.c_[gal_x, gal_y, gal_z])
+    #nn   = tree.query(np.c_[ran_xyz[0], ran_xyz[1], ran_xyz[2]], return_distance=False, dualtree=True)
+    #ran_lde = gal_lde[nn[:, 0]]
+    ran_lde = utils.get_mesh_value(logdist_error_mesh, ran_xyz, box['lims'])
+    ran_pve = utils.pv_from_logdist(ran_lde, tf_rand["Z"], cosmo)
 
-    ran_ndens = lookup_grid(ran_xyz_shifted, ndensweigrid,
-                            geom["xlims"], geom["ylims"], geom["zlims"])
-    ran_npv   = lookup_grid(ran_xyz_shifted, npvweigrid,
-                            geom["xlims"], geom["ylims"], geom["zlims"])
+    # Density grid lookups
+    ran_npv   = utils.get_mesh_value(npv_mesh, ran_xyz, box['lims'])
 
-    log.info("  Random NDENS: mean=%.4e  std=%.4e", ran_ndens.mean(), ran_ndens.std())
-    log.info("  Random NPV  : mean=%.4e  std=%.4e", ran_npv.mean(),   ran_npv.std())
+    # Remove randoms outside mesh
+    w = ran_npv > 0 
+    tf_rand = tf_rand[w]
+    ran_lde = ran_lde[w]
+    ran_pve = ran_pve[w]
+    ran_npv = ran_npv[w]
+
+    log.info("  Data npv  : mean=%.4e  std=%.4e", ran_npv.mean(),   ran_npv.std())
 
     columns = [
         ("RA",          tf_rand["RA"].to_numpy()),
@@ -650,34 +403,66 @@ def write_random_catalogue(
         ("Z",           tf_rand["Z"].to_numpy()),
         ("WEIGHT",      tf_rand["WEIGHT"].to_numpy()),
         ("NPV",         ran_npv),
-        ("NDENS",       ran_ndens),
+        #("NDENS",       ran_ndens),
         ("LOGDIST_ERR", ran_lde),
         ("PV_ERR",      ran_pve),
     ]
+    hdu = fits.BinTableHDU.from_columns(
+        [fits.Column(name=n, format="D", array=a) for n, a in columns]
+    )
+    mock_tf_clus_rand = cfg.mock_tf_clus_rand.format(phase=cfg.tf_clus.phase)
+    os.makedirs(os.path.dirname(mock_tf_clus_rand), exist_ok=True)
+    log.info("Writing random catalogue → %s", mock_tf_clus_rand)
+    hdu.writeto(mock_tf_clus_rand, overwrite=True)
 
-    #def _write(outfile: str, n: int) -> None:
-    #    idx = np.random.choice(len(tf_rand), n, replace=True)
-    hdu = fits.BinTableHDU.from_columns([
-            fits.Column(name=nm, format="D", array=arr)
-            for nm, arr in columns
-        ])
-    rand_file =  cfg.mock_tf_clus_rand.format(phase=phase)
-    log.info("  Writing random catalogue → %s", rand_file)
-    os.makedirs(os.path.dirname(rand_file), exist_ok=True)
-    hdu.writeto(rand_file, overwrite=True)
-
-    #n_base     = int((nztfmock * subfrac).sum())
-    #rand20_out = cfg.mock_tf_clus_rand.replace("random20", "random200")
-    #_write(rand20_out,            200 * n_base)
-    #_write(cfg.mock_tf_clus_rand,  20 * n_base)
 
 
 # ---------------------------------------------------------------------------
-# Main pipeline
+# Step 5 — Process each mock into a clustering mock
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+def run_clustering_mock_loop(mocks, headers):
+    """
+    Process all phase/realisation pairs into clustering mocks.
+    """
+    log.info("Generating clustering mocks …")
+
+    #for phase in range(cfg.n_phases):
+    for phase in [cfg.tf_clus.phase]:
+        for real in range(cfg.n_reals):
+            out_file = cfg.mock_tf_clus_data.format(phase=phase, real=real)
+            mock = mocks[mocks['real']==real]
+            header = headers[real]
+            log.info(f"  Mock phase={phase:03d} real={real:03d}:  {len(mock)} galaxies")
+            log.info(f"  Writing mock to {out_file}")
+            write_clustering_mock(mock, header, out_file)
+            
+def write_clustering_mock(mock, header, outfile) -> None:
+    """Write a processed mock to a FITS binary table."""
+
+    columns_to_keep = ['RA', 'DEC', 'ZOBS', 'NPV', 
+                       'LOGDIST_CORR', 'LOGDIST_GAUSS_ERR', 'LOGDIST_TRUE', 
+                       'PV', 'PV_ERR', 'PV_TRUE'] 
+    mock = mock[columns_to_keep]
+    mock.rename(columns={"ZOBS": "Z",
+                         "LOGDIST_CORR" : "LOGDIST",
+                         "LOGDIST_GAUSS_ERR": "LOGDIST_ERR"}, 
+                inplace=True)
+
+    table = Table.from_pandas(mock)
+    table.meta = header
+    os.makedirs(os.path.dirname(outfile), exist_ok=True)
+    table.write(outfile, format='fits', overwrite=True)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Pipeline TF clustering "
+        description="Pipeline tf clustering "
     )
     parser.add_argument("config_file", type=str, help="Configuration file path (yaml format)")
     parser.add_argument("phase", type=int, help="Phase (0–24)")
@@ -686,63 +471,68 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if not (0 <= args.phase <= 24):
         parser.error("phase should be between 0 and 24")
+
     return args
 
-def main():
+# ---------------------------------------------------------------------------
+# Main pipeline
+# ---------------------------------------------------------------------------
 
-    log.info("=== DESI TF Mocks Pipeline ===")
+def main() -> None:
     args = parse_args()
 
+    #-- Set seed
+    if args.seed is not None:
+        np.random.seed(args.seed)
+        log.info("Random seed set to %d", args.seed)
+
+    #-- Set config
     global cfg
-    cfg = load_config(args.config_file)
-    phase = args.phase 
-
-    # 1. Load observed data
-    tf_data, tf_rand = load_observed_data()
-
-    nztfdat = np.histogram(
-        tf_data["Z"], bins=cfg.tf_clus.nzbin, range=[cfg.tf_clus.zmin, cfg.tf_clus.zmax],
-        weights=tf_data["WEIGHT"],
-    )[0]
-
-    # 2. Accumulate mock statistics
-    stats = accumulate_mock_statistics(phase)
-
-    # 3. Sub-sampling fraction & logdist bias correction
-    subfrac     = compute_subsampling_fraction(nztfdat, stats["nztfmock"])
-    logdist_fix = compute_logdist_bias_correction(stats)
-
-    # 4. Build random catalogue (using BGS base randoms, sub-sampled to TF n(z))
-    tf_rand_cat = build_random_catalogue(phase, subfrac, stats["nztfmock"])
-
-    # 5. Grid geometry and density grids
-    geom = build_grid_geometry()
-
-    # Load the BGS clustering randoms for the density grid
-    bgs_clus_rand = Table.read(cfg.mock_bgs_clus_rand.format(phase=phase)).to_pandas()
-
-    ndensweigrid, npvweigrid = build_density_grids(
-        bgs_clus_rand, tf_rand_cat,
-        stats["nzmock"], stats["nztfmock"], subfrac, geom,
-    )
-
-    # 6. Generate clustering mocks
-    gal_x, gal_y, gal_z, gal_lde = run_clustering_mock_loop(
-        phase, subfrac, logdist_fix, ndensweigrid, npvweigrid, geom,
-    )
-
-    # 7. Write random catalogue
-    write_random_catalogue(
-        phase, tf_rand_cat, gal_x, gal_y, gal_z, gal_lde,
-        ndensweigrid, npvweigrid, geom, 
-        stats["nztfmock"], subfrac,
-    )
+    cfg = load_config(args.config_file)  
+    cfg.tf_clus.phase = args.phase
     
+    log.info(f"=== DESI TF clustering mocks pipeline for phase {cfg.tf_clus.phase:03d} ===")
+
+    distmax = cosmo.comoving_distance(cfg.tf_clus.zmax).value
+    box = utils.build_grid_box(distmax, cfg.tf_clus.ngrid)
+
+    # 1. Load observed data and compute n(z) 
+    tf_data = load_observed_data()
+    zbins = np.linspace(cfg.tf_clus.zmin, cfg.tf_clus.zmax, cfg.tf_clus.nzbin+1)
+    nz_tf_data, _ = np.histogram(tf_data["Z"], bins=zbins, weights=tf_data["WEIGHT"])
+
+    #-- Read mocks 
+    mocks, headers = read_mocks() 
+
+    #--  Accumulate mock statistics
+    stats = accumulate_mock_statistics(mocks)
+
+    #-- Sub-sampling fraction 
+    subsampling_fraction = compute_subsampling_fraction(nz_tf_data, stats["nz_tf_mock"])
+    mocks = subsample_mocks(mocks, subsampling_fraction)
+
+    #-- Compute and apply logdist bias correction
+    logdist_bias_corr = compute_logdist_bias_correction(mocks)
+    mocks["LOGDIST_CORR"] -= logdist_bias_corr(mocks['ZOBS'])
+
+    #-- Create mesh with average PV error in each cell, for later use in random catalogue
+    npv_mesh, logdist_error_mesh = build_pv_meshes(mocks, box)
+    mock_pos = utils.radec_to_xyz(mocks['RA'], mocks['DEC'], mocks['DIST'])
+    mocks['NPV'] = utils.get_mesh_value(npv_mesh, mock_pos, box['lims'])
+
+    #-- Build random catalogue
+    tf_rand_cat = build_random_catalogue(subsampling_fraction, stats["nz_tf_mock"])
+    write_random_catalogue(tf_rand_cat, npv_mesh, logdist_error_mesh, box)
+
+    #- Write clustering mocks
+    run_clustering_mock_loop(mocks, headers)
+        
     log.info("=== Updating permissions ===")
     result = subprocess.run(
         ["chgrp", "-R", "desi", cfg.mock_tf_clus_dir],
         check=True,
     )
+
     log.info("=== Pipeline complete ===")
 
 

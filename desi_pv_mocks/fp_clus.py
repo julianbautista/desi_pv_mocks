@@ -68,28 +68,27 @@ def read_mocks():
         log.info("  Phase %d …", phase)
         for real in range(cfg.n_reals):
             fp_file = cfg.mock_fp_full_data.format(phase=phase, real=real)
-            try:
-                mock = Table.read(fp_file).to_pandas()
+            
+            mock = Table.read(fp_file).to_pandas()
 
-                #-- Redshift cut
-                mock['real'] = real
-                mock = mock[ (mock["ZOBS"] >= cfg.fp_clus.zmin) 
-                            &(mock["ZOBS"] <= cfg.fp_clus.zmax)]
-                
-                #-- Gaussianise errors
-                mock["LOGDIST_GAUSS_ERR"] = utils.reweight(mock["LOGDIST_CORR"], 
-                                                     mock["LOGDIST_CORR_ERR"])
+            #-- Redshift cut
+            mock['real'] = real
+            mock = mock[ (mock["ZOBS"] >= cfg.fp_clus.zmin) 
+                        &(mock["ZOBS"] <= cfg.fp_clus.zmax)]
+            
+            #-- Gaussianise errors
+            mock["LOGDIST_GAUSS_ERR"] = utils.reweight(mock["LOGDIST_CORR"], 
+                                                    mock["LOGDIST_CORR_ERR"])
 
-                #-- Zero-point calibration
-                offset, _, _ = utils.weighted_avg_and_std(
-                    mock["LOGDIST_CORR"] - mock["LOGDIST_TRUE"],
-                    1.0 / mock["LOGDIST_GAUSS_ERR"] ** 2,
-                    )
-                mock["LOGDIST_CORR"] -= offset
-                
-                mocks.append(mock)
-            except Exception as exc:
-                log.warning("Skipping FP mock %s: %s", fp_file, exc)
+            #-- Zero-point calibration by forcing the mean measured logdistance ratio 
+            #-- to be equal to the mean true log-distance ratio
+            offset, _, _ = utils.weighted_avg_and_std(
+                mock["LOGDIST_CORR"] - mock["LOGDIST_TRUE"],
+                1.0 / mock["LOGDIST_GAUSS_ERR"] ** 2,
+                )
+            mock["LOGDIST_CORR"] -= offset
+            
+            mocks.append(mock)
 
     mocks = pd.concat(mocks, ignore_index=True)
     mocks['DIST'] = cosmo.comoving_distance(mocks["ZOBS"]).value
@@ -409,10 +408,11 @@ def write_clustering_mock(mock: pd.DataFrame, outfile: str) -> None:
     """Write a processed mock to a FITS binary table."""
 
     columns_to_keep = ['RA', 'DEC', 'ZOBS', 'NPV', 
-                       'LOGDIST', 'LOGDIST_GAUSS_ERR', 'LOGDIST_TRUE', 
+                       'LOGDIST_CORR', 'LOGDIST_GAUSS_ERR', 'LOGDIST_TRUE', 
                        'PV', 'PV_ERR', 'PV_TRUE'] 
     mock = mock[columns_to_keep]
     mock.rename(columns={"ZOBS": "Z", 
+                         "LOGDIST_CORR": "LOGDIST",
                          "LOGDIST_GAUSS_ERR": "LOGDIST_ERR"}, 
                 inplace=True)
 
@@ -492,8 +492,8 @@ def main() -> None:
 
     #-- Compute and apply logdist bias correction
     logdist_bias_corr = compute_logdist_bias_correction(mocks)
-    mocks["LOGDIST_CORR"] += logdist_bias_corr(mocks['ZOBS'])
-
+    mocks["LOGDIST_CORR"] -= logdist_bias_corr(mocks['ZOBS'])
+    
     #-- Create mesh with average PV error in each cell, for later use in random catalogue
     npv_mesh, logdist_error_mesh = build_pv_meshes(mocks, box)
     mock_pos = utils.radec_to_xyz(mocks['RA'], mocks['DEC'], mocks['DIST'])
