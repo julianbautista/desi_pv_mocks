@@ -9,6 +9,7 @@ import logging
 import argparse
 import os
 import h5py
+import subprocess
 import numpy as np
 import pandas as pd
 import scipy as sp
@@ -266,6 +267,13 @@ def main():
                 out[key] = arr.astype("S") if arr.dtype.kind == "U" else arr
 
         log.info("Written: %s  (%d galaxies)", mock_outfile, len(mock_df))
+
+    log.info("=== Updating permissions ===")
+    result = subprocess.run(
+        ["chgrp", "-R", "desi", cfg.mock_bgs_spec_dir],
+        check=True,
+    )
+
 
     # ------------------------------------------------------------------
     # Phase 2: accumulate 2D histograms for diagnostic plots
