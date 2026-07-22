@@ -116,7 +116,7 @@ bgs_clus:
   zmin: 0.01
   zmax: 0.1
   appmaglim: 20.0
-  absmaglim: -17.7
+  absmaglim: -17.7 # DR1: -18.1 
   ngrid: 128
 
 
