@@ -108,7 +108,7 @@ bgs_spec:
   r_mag_lim: 19.7
   col_min: -0.5
   col_max: 1.5
-  do_diagnostic_plots: false
+  do_diagnostic_plots: true
 
 #- BGS clustering mocks for density field
 bgs_clus:
@@ -194,5 +194,6 @@ tf_clus:
   zmin: 0.01
   zmax: 0.10
   nzbin: 36
+  inflate_errors: true
   comp_min: 0.5
   ngrid: 128

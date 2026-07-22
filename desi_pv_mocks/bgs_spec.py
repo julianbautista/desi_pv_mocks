@@ -309,7 +309,7 @@ def main():
         # ------------------------------------------------------------------
         plot_color_magnitude(
             spec, counts_cm, magbins, colbins,
-            cfg.mock_bgs_spec_plot_dir +"/BGS_PV_AbacusSummit_M_vs_gr.png",
+            cfg.mock_bgs_spec_plot_dir +f"/BGS_PV_AbacusSummit_M_vs_gr_ph{phase:03d}.png",
         )
         #plot_mass_ssfr(
         #    spec, counts_msfr, massbins, ssfrbins,
@@ -317,7 +317,7 @@ def main():
         #)
  
     log.info("=== Done ===")
- 
- 
+
+
 if __name__ == "__main__":
     main()

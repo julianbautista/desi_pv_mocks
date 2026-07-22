@@ -1,4 +1,6 @@
 import yaml
+import numpy as np
+import os
 
 class Config:
     """Recursively wraps a dict so fields are accessible as attributes."""
@@ -21,8 +23,27 @@ def load_config(path="config.yaml") -> Config:
         raw = yaml.safe_load(f)
     return Config(raw)
 
+def get_files_to_download(cfg):
+
+    files = []
+    for v in cfg.__dict__.values(): 
+        if(type(v)!=str):
+            continue
+        if v.endswith('.fits') or v.endswith('.csv') or v.endswith('.hdf5'):
+            if 'phase' in v:
+                for phase in range(25):
+                    if 'real' in v:
+                        for real in range(27):
+                            files.append(v.format(phase=phase, real=real))
+                    else:
+                        files.append(v.format(phase=phase))
+            else:
+                files.append(v)
+    return np.array(files)
+
+
 if __name__ == '__main__':
     cfg = load_config('config_files/mock_config_v3.0.yaml')
-    print(cfg.mock_bgs_spec_dir)
-    print(cfg.mock_bgs_clus_data.format(phase=1, real=2))
-    print(cfg.mock_bgs_clus_rand)
+    files = get_files_to_download(cfg)
+    exist = np.array([os.path.exists(f) for f in files])
+    print(files.size, np.unique(files).size, np.sum(exist))
