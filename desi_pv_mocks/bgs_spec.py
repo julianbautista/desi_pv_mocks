@@ -228,7 +228,7 @@ def main():
     cfg = load_config(args.config_file)
     phase = args.phase 
 
-    k_r = GAMA_KCorrection(Planck15, cfg.kcorr_file)
+    k_r = GAMA_KCorrection(Planck15, cfg.kcorr_r_path)
     spec = load_and_clean_spec(k_r)
     tree, norms = build_kdtree(spec)
  

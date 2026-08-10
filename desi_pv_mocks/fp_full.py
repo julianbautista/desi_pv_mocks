@@ -27,6 +27,8 @@ from scipy.spatial import KDTree
  
 from .k_correction import GAMA_KCorrection
 
+from .fast_fp_fit import FPData, explore_FP_multistart, final_fit_from_exploration, diagnose_exploration, threshold_scan, LIGHT_SPEED
+from .fast_fp_pdf import evaluate_logdist_moments
 
 # ---------------------------------------------------------------------------
 # Configuration 
@@ -67,10 +69,10 @@ def dbins() :
  
 def _compute_covariance_terms(a, b, sigma1, sigma2, sigma3, k=0.0):
     """
-    Calcule les éléments de la matrice de covariance intrinsèque du FP.
-    Équations B3–B8 de Howlett et al. 2022.
+    Compute the intrinsiccovariance terms for the Fundamental Plane.
+    Equations B3-B8 from Howlett et al. 2022.
  
-    Retourne un dict avec sigmar2, sigmas2, sigmai2, sigmars, sigmari, sigmasi.
+    Returns a dict with sigmar2, sigmas2, sigmai2, sigmars, sigmari, sigmasi.
     """
     fac1 = k * a**2 + k * b**2 - a
     fac2 = k * a - 1.0 - b**2
@@ -326,8 +328,37 @@ def compute_logdist(FPparams, fpmock):
         "logdist": mean,        "logdist_err": err,        "logdist_alpha": alpha,
         "logdist_corr": mean_c, "logdist_corr_err": err_c, "logdist_corr_alpha": alpha_c,
     }
- 
- 
+
+def compute_logdist_v2(fp_params, fpmock):
+
+    dbins = np.linspace(cfg.fp_full.dmin, cfg.fp_full.dmax, cfg.fp_full.nd, endpoint=True)
+    moments_all = evaluate_logdist_moments(
+        fp_params, dbins,
+        z_obs=fpmock["zobs"],
+        z=fpmock["z"],
+        zcmb_group=fpmock["zcos"],
+        r=fpmock["r"],
+        s=fpmock["s"],
+        i=fpmock["i"],
+        err_r=fpmock["er"],
+        err_s=fpmock["es"],
+        err_i=fpmock["ei"],
+        dz_cluster=fpmock["dz"],
+        kcorr=fpmock["kcorr_r"],
+        evo_corr=cfg.fp_full.evo_corr,
+        mag_low=cfg.fp_full.mag_low, 
+        mag_high=cfg.fp_full.mag_high,
+        smin=cfg.fp_full.smin,
+        smax=cfg.fp_full.smax,
+    )
+    for col, key in [("logdist_corr", "mean"), 
+                     ("logdist_corr_err", "err"), 
+                     ("logdist_corr_alpha", "alpha"),
+                     ("logdist", "mean_nmc"), 
+                     ("logdist_err", "err_nmc"),
+                     ("logdist_alpha", "alpha_nmc")]:
+        fpmock[col] = moments_all[key] 
+
 # ---------------------------------------------------------------------------
 # Chargement & filtrage des données
 # ---------------------------------------------------------------------------
@@ -410,22 +441,20 @@ def filter_mock(fpmock: pd.DataFrame) -> pd.DataFrame:
     fpmock = fpmock[fpmock["BA_ratio"] > 0.3]
     steps.append(("ellipticity", len(fpmock)))
  
-    #- v1 cuts
-    if cfg.data_fp_full_version == 'v1':
-        fpmock = fpmock[
-            (fpmock["col_obs"] > 0.68) &
-            (fpmock["col_obs"] > 1.3 * (fpmock["app_mag"] - fpmock["mag_z"]) - 0.12) &
-            (fpmock["col_obs"] < 2.0 * (fpmock["app_mag"] - fpmock["mag_z"]) - 0.15)
-        ]
-    # v2 cuts
-    elif cfg.data_fp_full_version == 'v2':
+    #- v2 color cuts
+    if cfg.data_fp_full_version == 'v2':
         fpmock = fpmock[
             (fpmock["col_obs"] > 0.68) &
             (fpmock["col_obs"] > 0.85 * (fpmock["app_mag"] - fpmock["mag_z"]) + 0.30) &
             (fpmock["col_obs"] < 2.0 * (fpmock["app_mag"] - fpmock["mag_z"]) - 0.15)
         ]
-    else:
-        logger.error(f" No color cuts defined for version {cfg.data_fp_full_version} !")
+    #- v1, v3, v4 color cuts
+    else :
+        fpmock = fpmock[
+            (fpmock["col_obs"] > 0.68) &
+            (fpmock["col_obs"] > 1.3 * (fpmock["app_mag"] - fpmock["mag_z"]) - 0.12) &
+            (fpmock["col_obs"] < 2.0 * (fpmock["app_mag"] - fpmock["mag_z"]) - 0.15)
+        ]
     steps.append(("color", len(fpmock)))
  
     fpmock = fpmock[(fpmock["app_mag"] > cfg.fp_full.mag_low) & (fpmock["app_mag"] < cfg.fp_full.mag_high)]
@@ -461,8 +490,8 @@ def generate_fp_properties(fpmock: pd.DataFrame) -> pd.DataFrame:
     sigmaMs  = -5.0 * sigmars - 2.5 * sigmasi
     sigmaMi  = -5.0 * sigmari - 2.5 * sigmai2
  
-    hats = cfg.fp_full.smean + sigmaMs / sigmaM2 * (fpmock["abs_mag"].to_numpy() - Mmean())
-    hati = cfg.fp_full.imean + sigmaMi / sigmaM2 * (fpmock["abs_mag"].to_numpy() - Mmean())
+    hats = cfg.fp_full.smean + sigmaMs / sigmaM2 * (fpmock["abs_mag"] - Mmean())
+    hati = cfg.fp_full.imean + sigmaMi / sigmaM2 * (fpmock["abs_mag"] - Mmean())
     sigma_cond = np.array([
         [sigmas2 - sigmaMs**2 / sigmaM2,       sigmasi - sigmaMs * sigmaMi / sigmaM2],
         [sigmasi - sigmaMs * sigmaMi / sigmaM2, sigmai2 - sigmaMi**2 / sigmaM2],
@@ -475,7 +504,7 @@ def generate_fp_properties(fpmock: pd.DataFrame) -> pd.DataFrame:
     fpmock = fpmock.copy()
     fpmock["s"] = draw[:, 0]
     fpmock["i"] = draw[:, 1]
-    fpmock["r"] = (4.65 - fpmock["abs_mag"].to_numpy() - 2.5 * fpmock["i"].to_numpy()
+    fpmock["r"] = (4.65 - fpmock["abs_mag"] - 2.5 * fpmock["i"]
                    - 2.5 * np.log10(2.0 * np.pi) - 15.0) / 5.0
     return fpmock
  
@@ -490,14 +519,14 @@ def assign_fp_errors(fpmock: pd.DataFrame, fp_data: pd.DataFrame) -> pd.DataFram
         lo, hi = np.amin(arr), np.amax(arr)
         return (arr - lo) / (hi - lo) if hi > lo else np.zeros_like(arr)
  
-    mock_r = fpmock["r"].to_numpy()
-    mock_s = fpmock["s"].to_numpy()
-    mock_i = fpmock["i"].to_numpy()
+    mock_r = fpmock["r"]
+    mock_s = fpmock["s"]
+    mock_i = fpmock["i"]
  
     tree = KDTree(np.column_stack([
-        _norm(fp_data["r"].to_numpy()),
-        _norm(fp_data["s"].to_numpy()),
-        _norm(fp_data["i"].to_numpy()),
+        _norm(fp_data["r"]),
+        _norm(fp_data["s"]),
+        _norm(fp_data["i"]),
     ]))
     query_pts = np.column_stack([_norm(mock_r), _norm(mock_s), _norm(mock_i)])
     _, neighbour = tree.query(query_pts, k=2)
@@ -521,11 +550,11 @@ def perturb_fp_observations(fpmock: pd.DataFrame) -> pd.DataFrame:
  
     Vectorized across the entire catalogue to avoid the Python loop.
     """
-    rnew = fpmock["r"].to_numpy() + fpmock["logdist_true"].to_numpy()
-    er   = fpmock["er"].to_numpy()
-    es   = fpmock["es"].to_numpy()
-    ei   = fpmock["ei"].to_numpy()
-    zobs = fpmock["zobs"].to_numpy()
+    rnew = fpmock["r"] + fpmock["logdist_true"]
+    er   = fpmock["er"]
+    es   = fpmock["es"]
+    ei   = fpmock["ei"]
+    zobs = fpmock["zobs"]
  
     sigma_pec = np.log10(1.0 + 300.0 / (299792.458 * zobs))
     var_r = er**2 + sigma_pec**2
@@ -549,8 +578,8 @@ def perturb_fp_observations(fpmock: pd.DataFrame) -> pd.DataFrame:
  
     fpmock = fpmock.copy()
     fpmock["r"] = rnew + noise_r
-    fpmock["s"] = fpmock["s"].to_numpy() + noise_s
-    fpmock["i"] = fpmock["i"].to_numpy() + noise_i
+    fpmock["s"] = fpmock["s"] + noise_s
+    fpmock["i"] = fpmock["i"] + noise_i
     return fpmock
  
  
@@ -576,12 +605,12 @@ def fit_fundamental_plane(fpmock: pd.DataFrame) -> tuple:
  
     # Initialisation avec les paramètres des données réelles
     data_bestfit = fp_params()
-    chi_sq = fpmock["Sn"].to_numpy() * FP_func(
+    chi_sq = fpmock["Sn"] * FP_func(
         data_bestfit, 0.0,
-        fpmock["zobs"].to_numpy(), fpmock["r"].to_numpy(),
-        fpmock["s"].to_numpy(), fpmock["i"].to_numpy(),
-        fpmock["er"].to_numpy(), fpmock["es"].to_numpy(), fpmock["ei"].to_numpy(),
-        fpmock["Sn"].to_numpy(), cfg.fp_full.smin, cfg.fp_full.smax,
+        fpmock["zobs"], fpmock["r"],
+        fpmock["s"], fpmock["i"],
+        fpmock["er"], fpmock["es"], fpmock["ei"],
+        fpmock["Sn"], cfg.fp_full.smin, cfg.fp_full.smax,
         sumgals=False, chi_squared_only=True,
     )[0]
     dof = np.sum(chi_sq) / (len(fpmock) - 8.0)
@@ -600,10 +629,10 @@ def fit_fundamental_plane(fpmock: pd.DataFrame) -> tuple:
             bounds=bounds,
             args=(
                 0.0,
-                data_fit["zobs"].to_numpy(), data_fit["r"].to_numpy(),
-                data_fit["s"].to_numpy(), data_fit["i"].to_numpy(),
-                data_fit["er"].to_numpy(), data_fit["es"].to_numpy(),
-                data_fit["ei"].to_numpy(), data_fit["Sn"].to_numpy(),
+                data_fit["zobs"], data_fit["r"],
+                data_fit["s"], data_fit["i"],
+                data_fit["er"], data_fit["es"],
+                data_fit["ei"], data_fit["Sn"],
                 cfg.fp_full.smin, cfg.fp_full.smax,
             ),
             maxiter=10000,
@@ -611,12 +640,12 @@ def fit_fundamental_plane(fpmock: pd.DataFrame) -> tuple:
             disp=False,
         )
  
-        chi_sq = fpmock["Sn"].to_numpy() * FP_func(
+        chi_sq = fpmock["Sn"] * FP_func(
             result.x, 0.0,
-            fpmock["zobs"].to_numpy(), fpmock["r"].to_numpy(),
-            fpmock["s"].to_numpy(), fpmock["i"].to_numpy(),
-            fpmock["er"].to_numpy(), fpmock["es"].to_numpy(), fpmock["ei"].to_numpy(),
-            fpmock["Sn"].to_numpy(), cfg.fp_full.smin, cfg.fp_full.smax,
+            fpmock["zobs"], fpmock["r"],
+            fpmock["s"], fpmock["i"],
+            fpmock["er"], fpmock["es"], fpmock["ei"],
+            fpmock["Sn"], cfg.fp_full.smin, cfg.fp_full.smax,
             sumgals=False, chi_squared_only=True,
         )[0]
         dof       = np.sum(chi_sq) / (len(fpmock) - 8.0)
@@ -635,7 +664,39 @@ def fit_fundamental_plane(fpmock: pd.DataFrame) -> tuple:
 
     return result.x, data_fit, badcount
  
- 
+def fit_fundamental_plane_v2(fpmock: pd.DataFrame):
+
+    fit_data = FPData.build(
+        z_obs=fpmock["zobs"],
+        r=fpmock["r"],
+        s=fpmock["s"],
+        i=fpmock["i"],
+        err_r=fpmock["er"],
+        err_s=fpmock["es"],
+        err_i=fpmock["ei"],
+        Sn=fpmock["Sn"],
+    )
+
+    DR1_FP = np.array([1.17, -0.80, 0.26, 2.135, 2.55, 0.058, 0.456, 0.225])
+    bounds = (
+        (1.0, 1.8), (-1.5, -0.5), (-0.5, 0.5), (2.0, 2.4),
+        (2.4, 3.0), (0.01, 0.12), (0.05, 0.5), (0.05, 0.3),
+    )
+
+    exploration = explore_FP_multistart(
+        fit_data, DR1_FP, cfg.fp_full.smin, cfg.fp_full.smax,
+        bounds=bounds, n_lhs=5, seed=42, verbose=False,
+    )
+
+    x, mask, info = final_fit_from_exploration(
+        fit_data, exploration,
+        x0=exploration['x_mean'],
+        smin=cfg.fp_full.smin, smax=cfg.fp_full.smax,
+        bounds=bounds,
+        f_outlier_threshold=0.0,
+    )
+    return x, mask, info
+
 # ---------------------------------------------------------------------------
 # Calcul de Sn (poids de sélection par volume)
 # ---------------------------------------------------------------------------
@@ -648,9 +709,9 @@ def compute_selection_weights(fpmock, cosmo, lumred_spline):
     Vmax = (1.0 + cfg.fp_full.zmax)**3 * cosmo.comoving_distance(cfg.fp_full.zmax).value**3
  
     Dlim = 10.0**(
-        (cfg.fp_full.mag_high - fpmock["app_mag"].to_numpy()
-         + 5.0 * np.log10(fpmock["dz"].to_numpy())
-         + 5.0 * np.log10(1.0 + fpmock["zobs"].to_numpy())) / 5.0
+        (cfg.fp_full.mag_high - fpmock["app_mag"]
+         + 5.0 * np.log10(fpmock["dz"])
+         + 5.0 * np.log10(1.0 + fpmock["zobs"])) / 5.0
     )
     zlim = lumred_spline(Dlim)
  
@@ -682,16 +743,16 @@ def write_output_catalog(outfile: str, fpmock: pd.DataFrame, FPparams: np.ndarra
         ("DEC",               "D", "dec"),
         ("ZOBS",              "D", "zobs"),
         ("ZCOS",              "D", "zcos"),
-        ("vx",                "D", "vx"),
-        ("vy",                "D", "vy"),
-        ("vz",                "D", "vz"),
-        ("r",                 "D", "r"),
-        ("er",                "D", "er"),
-        ("s",                 "D", "s"),
-        ("es",                "D", "es"),
-        ("i",                 "D", "i"),
-        ("ei",                "D", "ei"),
-        ("Sn",                "D", "Sn"),
+        ("VX",                "D", "vx"),
+        ("VY",                "D", "vy"),
+        ("VZ",                "D", "vz"),
+        ("R",                 "D", "r"),
+        ("ER",                "D", "er"),
+        ("S",                 "D", "s"),
+        ("ES",                "D", "es"),
+        ("I",                 "D", "i"),
+        ("EI",                "D", "ei"),
+        ("SN",                "D", "Sn"),
         ("LOGDIST_TRUE",      "D", "logdist_true"),
         ("LOGDIST",           "D", "logdist"),
         ("LOGDIST_ERR",       "D", "logdist_err"),
@@ -753,14 +814,17 @@ def main() -> None:
     k_g = GAMA_KCorrection(Planck15, cfg.kcorr_g_path)
  
     # --- Reading reference data catalogs ---
+    logger.info(f"Reading spec information from: {cfg.spec_csv}")
     spec   = load_spec_data(cfg.spec_csv, usecols=cfg.spec_keys)
+    logger.info(f"Reading real FP full catalog from: {cfg.data_fp_full}")
     fp_data = load_fp_catalog(cfg.data_fp_full)
  
     # --- Reading mock ---
     infile = cfg.mock_bgs_spec_data.format(phase=phase, real=real)
-    logger.info(f"Reading : {infile}")
+    logger.info(f"Reading BGS spec mock: {infile}")
     fpmock = load_mock_hdf5(infile, spec)
- 
+    logger.info(fpmock.columns)
+
     fpmock["kcorr_r"] = k_r.k(fpmock["zobs"], fpmock["col_obs"])
     fpmock["kcorr_g"] = k_g.k(fpmock["zobs"], fpmock["col_obs"])
  
@@ -768,9 +832,9 @@ def main() -> None:
     fpmock = filter_mock(fpmock)
  
     # --- Cosmological Distances ---
-    fpmock["dz"]          = cosmo.comoving_distance(fpmock["zobs"].to_numpy()).value
-    fpmock["dz_cluster"]  = cosmo.comoving_distance(fpmock["zcos"].to_numpy()).value
-    fpmock["logdist_true"]= np.log10(fpmock["dz"].to_numpy() / fpmock["dz_cluster"].to_numpy())
+    fpmock["dz"]          = cosmo.comoving_distance(fpmock["zobs"]).value
+    fpmock["dz_cluster"]  = cosmo.comoving_distance(fpmock["zcos"]).value
+    fpmock["logdist_true"]= np.log10(fpmock["dz"] / fpmock["dz_cluster"])
  
     # --- Generating synthetic FP properties ---
     fpmock = generate_fp_properties(fpmock)
@@ -787,19 +851,21 @@ def main() -> None:
     fpmock = compute_selection_weights(fpmock, cosmo, lumred_spline)
  
     # --- Fitting for the Fundamenta Plane ---
-    FPparams, data_fit, badcount = fit_fundamental_plane(fpmock)
-    fpmock = data_fit
+    #FPparams, data_fit, badcount = fit_fundamental_plane(fpmock)
+    fp_params, mask, info = fit_fundamental_plane_v2(fpmock) 
+    fpmock = fpmock[mask]
     logger.info(f"Mock after final outlier rejection : {len(fpmock)} galaxies")
  
     # --- Log-distances ---
-    logdist_results = compute_logdist(FPparams, fpmock)
-    for col, vals in logdist_results.items():
-        fpmock[col] = vals
- 
+    #logdist_results = compute_logdist(FPparams, fpmock)
+    #for col, vals in logdist_results.items():
+    #    fpmock[col] = vals
+    compute_logdist_v2(fp_params, fpmock)
+
     # --- Writing output mock ---
     chi2_final = float(np.sum(
         fpmock["Sn"].to_numpy() * FP_func(
-            FPparams, 0.0,
+            fp_params, 0.0,
             fpmock["zobs"].to_numpy(), fpmock["r"].to_numpy(),
             fpmock["s"].to_numpy(), fpmock["i"].to_numpy(),
             fpmock["er"].to_numpy(), fpmock["es"].to_numpy(), fpmock["ei"].to_numpy(),
@@ -807,7 +873,7 @@ def main() -> None:
             sumgals=False, chi_squared_only=True,
         )[0]
     ))
-    write_output_catalog(outfile, fpmock, FPparams, chi2_final, badcount)
+    write_output_catalog(outfile, fpmock, fp_params, chi2_final, np.sum(~mask))
  
     logger.info("=== Updating permissions ===")
     result = subprocess.run(

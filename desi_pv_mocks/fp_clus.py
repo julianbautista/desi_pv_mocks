@@ -20,13 +20,13 @@ from scipy.interpolate import CubicSpline
 from scipy.signal import savgol_filter
 #from sklearn.neighbors import KDTree
 
-import utils
+from . import utils
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-from config import load_config
+from .config import load_config
 cfg = None
 
 # ---------------------------------------------------------------------------
