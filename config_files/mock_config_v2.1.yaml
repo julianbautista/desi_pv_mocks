@@ -11,10 +11,10 @@ comp_field: "Y3_COMP"  # completeness field: Y1_COMP, Y3_COMP, or Y5
 version_bgs_base: "v2.0"
 version_bgs_spec: "v2.1"
 version_bgs_clus: "v2.1"
-version_fp_full: "v2.1"
-version_fp_clus: "v2.1"
-version_tf_full: "v0.5.6"
-version_tf_clus: "v0.5.7"
+version_fp_full: "v2.2"
+version_fp_clus: "v2.2"
+version_tf_full: "v2.0.8"
+version_tf_clus: "v2.0.8"
 
 mock_dir: "/global/cfs/cdirs/desi/science/td/pv/mocks/DR2"
 
@@ -35,10 +35,10 @@ mock_fp_full_data: "{mock_fp_full_dir}/FP_AbacusSummit_c000_ph{{phase:03d}}_r{{r
 
 mock_fp_clus_dir: "{mock_dir}/FP_mocks/clustering_mocks/{version_fp_clus}"
 mock_fp_clus_data: "{mock_fp_clus_dir}/data/FP_AbacusSummit_clustering_c000_ph{{phase:03d}}_r{{real:03d}}.fits"
-mock_fp_clus_rand: "{mock_fp_clus_dir}/rand/FP_AbacusSummit_clustering_random{n_reals}x.fits"
+mock_fp_clus_rand: "{mock_fp_clus_dir}/rand/FP_AbacusSummit_clustering_random{n_reals}x_ph{{phase:03d}}.fits"
 
 mock_tf_full_dir: "{mock_dir}/TF_mocks/full_mocks/{version_tf_full}"
-mock_tf_full_data: "{mock_tf_full_dir}/TF_extended_AbacusSummit_base_c000_ph{{phase:03d}}_r{{real:03d}}_zsnap0.20_zmax0.11.fits"
+mock_tf_full_data: "{mock_tf_full_dir}/TF_AbacusSummit_base_c000_ph{{phase:03d}}_r{{real:03d}}_zsnap0.20_zmax0.11.fits"
 
 mock_tf_clus_dir: "{mock_dir}/TF_mocks/clustering_mocks/{version_tf_clus}"
 mock_tf_clus_data: "{mock_tf_clus_dir}/data/TF_AbacusSummit_clustering_c000_ph{{phase:03d}}_r{{real:03d}}.fits"
@@ -51,13 +51,12 @@ data_dir: "/global/cfs/cdirs/desi/science/td/pv"
 data_bgs_clus_data: "{data_dir}/bgsclustering/Y3/BGS_BRIGHT_clustering_forPV_data.fits"
 data_bgs_clus_rand: "{data_dir}/bgsclustering/Y3/BGS_BRIGHT_clustering_forPV_random.fits"
 
-data_fp_full_version: "v1"
-data_n_rand: 20
+data_fp_full_version: "v4"
 data_fp_full: "{data_dir}/fpgalaxies/Y3/{data_fp_full_version}/FP_pv_cat_{data_fp_full_version}.csv"
 data_fp_clus_data: "{data_dir}/fpgalaxies/Y3/{data_fp_full_version}/FP_clustering_data_{data_fp_full_version}.fits"
 data_fp_clus_rand: "{data_dir}/fpgalaxies/Y3/{data_fp_full_version}/FP_clustering_random20_{data_fp_full_version}.fits"
 
-data_tf_full_version: "v3"  # By Sara Moore
+data_tf_full_version: "v5a"  # By Sara Moore
 data_tf_full: "{data_dir}/tfgalaxies/Y3/DESI-DR2_TF_pv_cat_{data_tf_full_version}.fits"
 data_tf_pickle: "{data_dir}/tfgalaxies/Y3/..."
 data_tf_clus_data: "{data_dir}/tfgalaxies/Y3/TF_clustering_data_{data_tf_full_version}.fits"
@@ -123,7 +122,8 @@ bgs_clus:
 #- Fundamental Plane full mocks
 fp_full:
   overwrite: true
-
+  comp_min: 0.5
+  
   # FP parameters (fit to data)
   a: 1.182
   b: -0.803
@@ -179,7 +179,7 @@ tf_full:
 
 #- Fundamental Plane clustering mocks for velocity field
 fp_clus:
-  overwrite: true
+  overwrite: false
   phase: -1
   zmin: 0.01
   zmax: 0.10
@@ -194,6 +194,7 @@ tf_clus:
   zmin: 0.01
   zmax: 0.10
   nzbin: 36
-  inflate_errors: true
+  inflate_errors: false
+  gaussianize_errors: false
   comp_min: 0.5
   ngrid: 128

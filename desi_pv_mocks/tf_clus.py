@@ -20,13 +20,13 @@ from scipy.interpolate import CubicSpline
 from scipy.signal import savgol_filter
 from sklearn.neighbors import KDTree
 
-import utils
+from . import utils
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-from config import load_config
+from .config import load_config
 cfg = None
 
 # ---------------------------------------------------------------------------
@@ -122,10 +122,19 @@ def read_mocks():
             mock["LOGDIST_CORR"] = mock["LOGDIST"].copy()
             mock["LOGDIST_CORR_ERR"] = mock["LOGDIST_ERR"].copy() 
 
+            #-- Remove outliers and negative magnitude errors
+            mock = mock[ (mock['MAIN'] == True) ]
+            mock = mock[ (mock['G_ABSMAG_SB26_ERR'] > 0) & 
+                         (mock['R_ABSMAG_SB26_ERR'] > 0) & 
+                         (mock['Z_ABSMAG_SB26_ERR'] > 0) ]
+
+            
             #-- Gaussianise errors
-            mock["LOGDIST_GAUSS_ERR"] = utils.reweight(mock["LOGDIST_CORR"], 
-                                                 mock["LOGDIST_CORR_ERR"])
-            #mock["LOGDIST_GAUSS_ERR"] = mock["LOGDIST_ERR"].copy()
+            if cfg.tf_clus.gaussianize_errors:
+                mock["LOGDIST_GAUSS_ERR"] = utils.reweight(mock["LOGDIST_CORR"], 
+                                                           mock["LOGDIST_CORR_ERR"])
+            else:
+                mock["LOGDIST_GAUSS_ERR"] = mock["LOGDIST_ERR"].copy()
 
             #-- Zero-point calibration
             offset, _, _ = utils.weighted_avg_and_std(

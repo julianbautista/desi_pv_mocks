@@ -325,7 +325,12 @@ def write_random_catalogue(
     Assign logdist/PV errors to randoms via nearest-neighbour matching,
     then write the FITS random catalogue.
     """
-    log.info("Building random catalogue with NN error assignment …")
+    mock_fp_clus_rand = cfg.mock_fp_clus_rand.format(phase=cfg.fp_clus.phase)
+    if os.path.exists(mock_fp_clus_rand) and not cfg.fp_clus.overwrite:
+        log.info("Already exists: %s — skipped", mock_fp_clus_rand)
+        return    
+        
+    log.info("Building random catalogue …")
 
     # Truncate random catalogue to rfact × expected galaxy count
     #n_target = cfg.fp_clus.rfact * int((nz_fp_mock * subsampling_fraction).sum())
@@ -407,6 +412,10 @@ def run_clustering_mock_loop(
 def write_clustering_mock(mock: pd.DataFrame, outfile: str) -> None:
     """Write a processed mock to a FITS binary table."""
 
+    if os.path.exists(outfile) and not cfg.fp_clus.overwrite:
+        log.info("Already exists: %s — skipped", outfile)
+        return
+    
     columns_to_keep = ['RA', 'DEC', 'ZOBS', 'NPV', 
                        'LOGDIST_CORR', 'LOGDIST_GAUSS_ERR', 'LOGDIST_TRUE', 
                        'PV', 'PV_ERR', 'PV_TRUE'] 
