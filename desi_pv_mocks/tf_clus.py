@@ -516,7 +516,7 @@ def main() -> None:
     #--  Accumulate mock statistics
     stats = accumulate_mock_statistics(mocks)
 
-    #-- Sub-sampling fraction 
+    #-- Sub-sampling fraction between the tf clustering real data and the tf full mock data
     subsampling_fraction = compute_subsampling_fraction(nz_tf_data, stats["nz_tf_mock"])
     mocks = subsample_mocks(mocks, subsampling_fraction)
 

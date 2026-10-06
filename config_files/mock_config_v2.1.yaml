@@ -11,10 +11,15 @@ comp_field: "Y3_COMP"  # completeness field: Y1_COMP, Y3_COMP, or Y5
 version_bgs_base: "v2.0"
 version_bgs_spec: "v2.1"
 version_bgs_clus: "v2.1"
+
 version_fp_full: "v2.2"
 version_fp_clus: "v2.2"
-version_tf_full: "v2.0.8"
-version_tf_clus: "v2.0.8"
+
+version_tf_full: "v2.0.10"
+version_tf_clus: "v2.0.10"
+
+data_fp_full_version: "v5" # by Caitlin Ross and Cullan Howlett
+data_tf_full_version: "v7a"  # By Sara Moore, Kelly Douglass, Segev BenZvi and Alex Kim
 
 mock_dir: "/global/cfs/cdirs/desi/science/td/pv/mocks/DR2"
 
@@ -51,12 +56,10 @@ data_dir: "/global/cfs/cdirs/desi/science/td/pv"
 data_bgs_clus_data: "{data_dir}/bgsclustering/Y3/BGS_BRIGHT_clustering_forPV_data.fits"
 data_bgs_clus_rand: "{data_dir}/bgsclustering/Y3/BGS_BRIGHT_clustering_forPV_random.fits"
 
-data_fp_full_version: "v4"
 data_fp_full: "{data_dir}/fpgalaxies/Y3/{data_fp_full_version}/FP_pv_cat_{data_fp_full_version}.csv"
 data_fp_clus_data: "{data_dir}/fpgalaxies/Y3/{data_fp_full_version}/FP_clustering_data_{data_fp_full_version}.fits"
 data_fp_clus_rand: "{data_dir}/fpgalaxies/Y3/{data_fp_full_version}/FP_clustering_random20_{data_fp_full_version}.fits"
 
-data_tf_full_version: "v5a"  # By Sara Moore
 data_tf_full: "{data_dir}/tfgalaxies/Y3/DESI-DR2_TF_pv_cat_{data_tf_full_version}.fits"
 data_tf_pickle: "{data_dir}/tfgalaxies/Y3/..."
 data_tf_clus_data: "{data_dir}/tfgalaxies/Y3/TF_clustering_data_{data_tf_full_version}.fits"
@@ -197,4 +200,4 @@ tf_clus:
   inflate_errors: false
   gaussianize_errors: false
   comp_min: 0.5
-  ngrid: 128
+  ngrid: 48
